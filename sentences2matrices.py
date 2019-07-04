@@ -1,26 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import sys
-import time
-import glob
-import pickle as pickle
+
 from gensim.models import KeyedVectors, keyedvectors
-from gensim.models import fasttext
-from gensim.models import word2vec
-from shutil import copyfile
-from os import remove
-from os.path import realpath
-from os import stat
-import csv
 from nltk.tokenize import word_tokenize
 import numpy as np
-import matplotlib.pyplot as plt
-
 import argparse
 from progressbar import progressbar
 
 
+
+matrix_size = 32 # Define the shape of the matrices
 
 def cossim2distance(x):
     """
@@ -30,6 +20,33 @@ def cossim2distance(x):
     """
     # distance = sqrt(2(1-cossim(a,b)))
     return np.sqrt(2*(1-np.minimum(x, 1)))
+
+
+def normalizeAndSymetrize(matrix):
+    """
+    Normalize (Norm L1) a matrix in the first and second axis (then we obtain two matrices).
+    Then, the component wise geometric means of these two matrices are computed.
+    :param matrix: A numpy ndarray like matrix
+    :return: None, the computation is done in place;
+    """
+    ponderation = np.sqrt(np.sum(matrix, axis=1, keepdims=True).dot(np.sum(matrix, axis=0, keepdims=True)))
+    assert(ponderation.shape == matrix.shape)
+    np.divide(matrix, ponderation, out=matrix)
+
+
+def reshaperMatrix(matrix, n):
+    """
+    Take a matrix and expend it to the nxn size.
+    :param matrix: input ndarray like matrix.
+    :param n: first axis size.
+    :return: a nxn array.
+    """
+    output_matrix = np.zeros((n, n))
+    input_n, input_m = matrix.shape
+    for x in range(n):
+        for y in range(n):
+            output_matrix[x, y] = matrix[x % input_n][y % input_m]
+    return output_matrix
 
 
 
@@ -45,9 +62,8 @@ def monolingualMatrices(sentences_couples, model_path, dict_to_update):
             s2_vectors = np.array([wv_model.get_vector(word) for word in s2_words])
             s1_vectors_normalized = s1_vectors/np.linalg.norm(s1_vectors, axis=1, keepdims=True)
             s2_vectors_normalized = s2_vectors/np.linalg.norm(s2_vectors, axis=1, keepdims=True)
-            cossim_matrix = s1_vectors_normalized.dot(s2_vectors_normalized.T)
-            distance_matrix = cossim2distance(cossim_matrix)
-            dict_to_update[(sentence1, sentence2)] = distance_matrix
+            matrix = s1_vectors_normalized.dot(s2_vectors_normalized.T)
+            dict_to_update[(sentence1, sentence2)] = matrix
         except:
             pass
 
@@ -55,8 +71,7 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
     tt_model = dict()
     model_file = open(model_path)
     for line in model_file:
-        w2, w1, score = line.rstrip('\n').split(" ")
-        #w1, w2, score = line.rstrip('\n').split(" ")
+        w1, w2, score = line.rstrip('\n').split(" ")
         tt_model[(w1, w2)] = np.float32(score)
     model_file.close()
 
@@ -73,9 +88,6 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
                     matrix[i, j] = tt_model[(s1_words[i], s2_words[j])]
                 except:
                     matrix[i, j] = 0
-        ponderation = np.sqrt(np.sum(matrix, axis=1, keepdims=True).dot(np.sum(matrix, axis=0, keepdims=True)))
-
-        matrix = np.divide(matrix, ponderation, where=ponderation != 0)
         dict_to_update[(sentence1, sentence2)] = matrix
 
 
@@ -90,11 +102,16 @@ if __name__ == '__main__':
 
     #Argz parsing
     parser = argparse.ArgumentParser(description='Computes alignment matrices.')
-    parser.add_argument('--input', dest='input_path', action='store', help='Cuboid analogies textfile to proceed.')
-    parser.add_argument('--output', dest='output_path', action='store', help='Output name to store matrices.')
-    parser.add_argument('--first_language_model', dest='model1_path', action='store', help='Word embeding model path. Will be open with gensim.open().')
-    parser.add_argument('--second_language_model', dest='model2_path', action='store', help='Word embeding model path. Will be open with gensim.open().')
-    parser.add_argument('--bilingual_model', dest='bilingual_model_path', action='store', help='Word translation model path. Should looks like a trained Hieraligne model.')
+    parser.add_argument('--input', dest='input_path', action='store',
+                        help='Cuboid analogies textfile to proceed.')
+    parser.add_argument('--output', dest='output_path', action='store',
+                        help='Output name to store matrices.')
+    parser.add_argument('--first_language_model', dest='model1_path', action='store',
+                        help='Word embeding model path. Will be open with gensim.open().')
+    parser.add_argument('--second_language_model', dest='model2_path', action='store',
+                        help='Word embeding model path. Will be open with gensim.open().')
+    parser.add_argument('--bilingual_model', dest='bilingual_model_path', action='store',
+                        help='Word translation model path. Should looks like a trained Hieraligne model.')
     args = parser.parse_args()
     input_path = args.input_path
     output_path = args.output_path
@@ -107,12 +124,14 @@ if __name__ == '__main__':
     input_file = open(input_path)
     lines = input_file.read().splitlines()
     input_file.close()
-    assert(len(lines) % 2 == 0)  # One analogie tooks 2 lines. So there is an even number of lines.
+    assert(len(lines) % 2 == 0)  # One analogy takes 2 lines. So there is an even number of lines.
     language1_couples = set()
     language2_couples = set()
     bilingual_couples = set()
-    for i in progressbar(range(0, 10, 2)):
+
+    for i in progressbar(range(0, len(lines), 2)):
         sentences = [lines[i].split("\t"), lines[i+1].split("\t")]
+
         language1_couples.add(couple_sort((sentences[0][0], sentences[0][1])))
         language1_couples.add(couple_sort((sentences[0][2], sentences[0][3])))
         language1_couples.add(couple_sort((sentences[0][0], sentences[0][2])))
@@ -123,10 +142,8 @@ if __name__ == '__main__':
         language2_couples.add(couple_sort((sentences[1][0], sentences[1][2])))
         language2_couples.add(couple_sort((sentences[1][1], sentences[1][3])))
 
-        bilingual_couples.add((sentences[0][0], sentences[1][0]))
-        bilingual_couples.add((sentences[0][1], sentences[1][1]))
-        bilingual_couples.add((sentences[0][2], sentences[1][2]))
-        bilingual_couples.add((sentences[0][3], sentences[1][3]))
+        for k in range(4):
+            bilingual_couples.add((sentences[0][k], sentences[1][k]))
 
     matrices_dict = dict()
     monolingualMatrices(language1_couples, model1_path, matrices_dict)
@@ -136,7 +153,7 @@ if __name__ == '__main__':
     keys, values = zip(*matrices_dict.items())
     values_dict = dict()
     for i, value in enumerate(values):
-        values_dict[str(i)] = value
+        values_dict[str(i)] = reshaperMatrix(value, matrix_size)
     np.savez(output_path, index=keys, **values_dict)
 
 
