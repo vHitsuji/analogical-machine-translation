@@ -64,6 +64,7 @@ def monolingualMatrices(sentences_couples, model_path, dict_to_update):
             s2_vectors_normalized = s2_vectors/np.linalg.norm(s2_vectors, axis=1, keepdims=True)
             matrix = s1_vectors_normalized.dot(s2_vectors_normalized.T)
             dict_to_update[(sentence1, sentence2)] = matrix
+            dict_to_update[(sentence2, sentence1)] = matrix.T
         except:
             pass
 
@@ -129,32 +130,65 @@ if __name__ == '__main__':
     language2_couples = set()
     bilingual_couples = set()
 
+    # for each analogy.
+    analogies = list()
     for i in progressbar(range(0, len(lines), 2)):
-        sentences = [lines[i].split("\t"), lines[i+1].split("\t")]
+        analogies.append([lines[i].split("\t"), lines[i + 1].split("\t")])
+    for analogy in progressbar(analogies):
+        language1_couples.add((analogy[0][0], analogy[0][1]))
+        language1_couples.add((analogy[0][2], analogy[0][3]))
+        language1_couples.add((analogy[0][0], analogy[0][2]))
+        language1_couples.add((analogy[0][1], analogy[0][3]))
 
-        language1_couples.add(couple_sort((sentences[0][0], sentences[0][1])))
-        language1_couples.add(couple_sort((sentences[0][2], sentences[0][3])))
-        language1_couples.add(couple_sort((sentences[0][0], sentences[0][2])))
-        language1_couples.add(couple_sort((sentences[0][1], sentences[0][3])))
-
-        language2_couples.add(couple_sort((sentences[1][0], sentences[1][1])))
-        language2_couples.add(couple_sort((sentences[1][2], sentences[1][3])))
-        language2_couples.add(couple_sort((sentences[1][0], sentences[1][2])))
-        language2_couples.add(couple_sort((sentences[1][1], sentences[1][3])))
+        language2_couples.add((analogy[1][0], analogy[1][1]))
+        language2_couples.add((analogy[1][2], analogy[1][3]))
+        language2_couples.add((analogy[1][0], analogy[1][2]))
+        language2_couples.add((analogy[1][1], analogy[1][3]))
 
         for k in range(4):
-            bilingual_couples.add((sentences[0][k], sentences[1][k]))
+            bilingual_couples.add((analogy[0][k], analogy[1][k]))
 
     matrices_dict = dict()
     monolingualMatrices(language1_couples, model1_path, matrices_dict)
     monolingualMatrices(language2_couples, model2_path, matrices_dict)
     bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
 
+    #  From there, matrices_dict contains all the necessary matrices
+    equivalent_analogies = [
+        [0, 1, 2, 3], [2, 3, 0, 1],
+        [0, 2, 1, 3], [1, 3, 0, 2],
+        [1, 0, 3, 2], [3, 2, 1, 0],
+        [2, 0, 3, 1], [3, 1, 2, 0]
+    ]
+
+
     keys, values = zip(*matrices_dict.items())
+    keys_index = {key: index for index, key in enumerate(keys)}
+
+    analogy_matrices_list = []
+    for analogy in progressbar(analogies):
+        for i0, i1, i2, i3 in equivalent_analogies:
+            try:
+                analogy_matrices = [
+                    keys_index[(analogy[0][i0], analogy[0][i1])],
+                    keys_index[(analogy[0][i1], analogy[1][i1])],
+                    keys_index[(analogy[0][i0], analogy[0][i2])],
+                    keys_index[(analogy[0][i2], analogy[1][i2])],
+                    keys_index[(analogy[1][i2], analogy[1][i3])],
+                    keys_index[(analogy[1][i1], analogy[1][i3])],
+                    keys_index[(analogy[0][i0], analogy[1][i0])],
+                    keys_index[(analogy[1][i0], analogy[1][i2])],
+                    keys_index[(analogy[1][i0], analogy[1][i1])],
+                ]
+                analogy_matrices_list.append(analogy_matrices)
+            except:
+                pass
+
+
     values_dict = dict()
     for i, value in enumerate(values):
         values_dict[str(i)] = reshaperMatrix(value, matrix_size)
-    np.savez(output_path, index=keys, **values_dict)
+    np.savez(output_path, index=keys, analogies=analogy_matrices_list, **values_dict)
 
 
 
