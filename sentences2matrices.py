@@ -185,10 +185,9 @@ if __name__ == '__main__':
                 pass
 
 
-    values_dict = dict()
-    for i, value in enumerate(values):
-        values_dict[str(i)] = reshaperMatrix(value, matrix_size)
-    np.savez(output_path, index=keys, analogies=analogy_matrices_list, **values_dict)
+    matrices = [reshaperMatrix(value, matrix_size) for _, value in enumerate(values)]
+    matrices = np.stack(matrices, axis=0)
+    np.savez(output_path, index=keys, analogies=analogy_matrices_list, matrices=matrices)
 
 
 
