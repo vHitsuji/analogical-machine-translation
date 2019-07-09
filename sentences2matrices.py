@@ -41,11 +41,11 @@ def reshaperMatrix(matrix, n):
     :param n: first axis size.
     :return: a nxn array.
     """
-    output_matrix = np.zeros((n, n))
+    output_matrix = (-1)*np.zeros((n, n))
     input_n, input_m = matrix.shape
-    for x in range(n):
-        for y in range(n):
-            output_matrix[x, y] = matrix[x % input_n][y % input_m]
+    for x in range(input_n):
+        for y in range(input_m):
+            output_matrix[x, y] = matrix[x, y]
     return output_matrix
 
 
@@ -89,6 +89,7 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
                     matrix[i, j] = tt_model[(s1_words[i], s2_words[j])]
                 except:
                     matrix[i, j] = 0
+        matrix = (matrix * 2) - 1
         dict_to_update[(sentence1, sentence2)] = matrix
 
 
@@ -166,6 +167,7 @@ if __name__ == '__main__':
     keys_index = {key: index for index, key in enumerate(keys)}
 
     analogy_matrices_list = []
+    analogies_lengths_list = []
     for analogy in progressbar(analogies):
         for i0, i1, i2, i3 in equivalent_analogies:
             try:
@@ -176,18 +178,38 @@ if __name__ == '__main__':
                     keys_index[(analogy[0][i2], analogy[1][i2])],
                     keys_index[(analogy[1][i2], analogy[1][i3])],
                     keys_index[(analogy[1][i1], analogy[1][i3])],
+
                     keys_index[(analogy[0][i0], analogy[1][i0])],
                     keys_index[(analogy[1][i0], analogy[1][i2])],
                     keys_index[(analogy[1][i0], analogy[1][i1])],
                 ]
                 analogy_matrices_list.append(analogy_matrices)
+
+                la, lb = values[analogy_matrices[0]].shape
+                lc, lc2 = values[analogy_matrices[3]].shape
+                la2, lb2 = values[analogy_matrices[8]].shape
+                _, ld2 = values[analogy_matrices[4]].shape
+
+                analogies_lengths_list.append((la, lb, lc, lb2, lc2, ld2, la2))
+
             except:
                 pass
 
 
+
+
+    analogies_lengths_dict = dict()
+    for lengths in analogies_lengths_list:
+        try:
+            analogies_lengths_dict[lengths] += 1
+        except:
+            analogies_lengths_dict[lengths] = 1
+    print(len(analogies_lengths_dict))
+
     matrices = [reshaperMatrix(value, matrix_size) for _, value in enumerate(values)]
+    print(matrices[:3])
     matrices = np.stack(matrices, axis=0)
-    np.savez(output_path, index=keys, analogies=analogy_matrices_list, matrices=matrices)
+    np.savez(output_path, index=keys, analogies=analogy_matrices_list, matrices=matrices, lengths=analogies_lengths_list)
 
 
 
