@@ -7,10 +7,59 @@ from nltk.tokenize import word_tokenize
 import numpy as np
 import argparse
 from progressbar import progressbar
+import matplotlib.pyplot as plt
+import seaborn as sns
+from collections import Counter
 
 
+from scipy.optimize import linprog
 
-matrix_size = 32 # Define the shape of the matrices
+
+def simplexAlign(matrix):
+
+    n, m = matrix.shape
+    all_constraint = list()
+    for i in range(n):
+        constraint = list()
+        for j in range(n):
+            for k in range(m):
+                if i == j:
+                    constraint.append(1)
+                else:
+                    constraint.append(0)
+        all_constraint.append(constraint)
+
+    for i in range(m):
+        constraint = list()
+        for j in range(n):
+            for k in range(m):
+                if i == k:
+                    constraint.append(1)
+                else:
+                    constraint.append(0)
+        all_constraint.append(constraint)
+
+    all_constraint_rh = np.array([1] * len(all_constraint))
+    all_constraint = np.array(all_constraint)
+    c = -np.array(matrix.flatten())
+    result = linprog(c, A_ub=all_constraint, b_ub=all_constraint_rh).x
+    result.shape = n, m
+    return result
+
+
+def printMatrix(matrix, s1_words=None, s2_words=None):
+    """
+    Print an alignment matrix with given string as axis scale.
+    Do not forget to plt.show() when you want to show the matrix.
+    :param matrix: Matrix to show.
+    :param s1_words: x_axis sentence.
+    :param s2_words: y_axis sentence.
+    :return: None
+    """
+    plt.matshow(matrix, cmap="gray_r")
+    if s1_words is not None and s1_words is not None:
+        plt.xticks(range(len(s2_words)), s2_words)
+        plt.yticks(range(len(s1_words)), s1_words)
 
 def cossim2distance(x):
     """
@@ -18,34 +67,52 @@ def cossim2distance(x):
     :param x: a scalar value or a np.array like (in this case, apply elementwise).
     :return: The distance base on x seen as the cosine similarity (return sqrt(2-2x))
     """
-    # distance = sqrt(2(1-cossim(a,b)))
     return np.sqrt(2*(1-np.minimum(x, 1)))
 
 
-def normalizeAndSymetrize(matrix):
-    """
-    Normalize (Norm L1) a matrix in the first and second axis (then we obtain two matrices).
-    Then, the component wise geometric means of these two matrices are computed.
-    :param matrix: A numpy ndarray like matrix
-    :return: None, the computation is done in place;
-    """
-    ponderation = np.sqrt(np.sum(matrix, axis=1, keepdims=True).dot(np.sum(matrix, axis=0, keepdims=True)))
-    assert(ponderation.shape == matrix.shape)
-    np.divide(matrix, ponderation, out=matrix)
+def reshapeSentence(sentence, size, padding=False):
+    sentence_words = sentence.split(" ")
+    new_sentence_words = list()
+    if padding:
+               q = size//len(sentence_words)
+               for word in sentence_words:
+                   new_sentence_words.extend(q*[word])
 
 
-def reshaperMatrix(matrix, n):
+    else:
+        new_sentence_words = sentence_words
+    new_sentence_words.extend((size - len(new_sentence_words)) * ["#"])
+    sentence = " ".join(new_sentence_words)
+    return sentence
+
+def reshapeMatrix(matrix, size, padding=False):
     """
-    Take a matrix and expend it to the nxn size.
+    Take a matrix and expend it to the size x size size.
+    Use the "repeat words, then padding" strategy.
     :param matrix: input ndarray like matrix.
-    :param n: first axis size.
-    :return: a nxn array.
+    :param size: size of the edges of the output matrix.
+    :return: a size x size array.
     """
-    output_matrix = (-1)*np.zeros((n, n))
-    input_n, input_m = matrix.shape
-    for x in range(input_n):
-        for y in range(input_m):
-            output_matrix[x, y] = matrix[x, y]
+
+    output_matrix = np.zeros((size, size))
+    n, m = matrix.shape
+
+    if padding:
+        qn, rn = divmod(size, n)
+        qm, rm = divmod(size, m)
+
+        #  Repeat words
+        ones_matrix = np.ones((qn, qm))
+        for i in range(n):
+            for j in range(m):
+                value = matrix[i, j]
+                output_matrix[qn * i:qn * (i + 1), qm * j:qm * (j + 1)] = value * ones_matrix
+
+        #  Add padding
+        output_matrix[n * qn:size, m * qm:size] = np.ones((rn, rm))
+    else:
+        output_matrix[:n, :m] = matrix
+
     return output_matrix
 
 
@@ -54,21 +121,44 @@ def reshaperMatrix(matrix, n):
 
 def monolingualMatrices(sentences_couples, model_path, dict_to_update):
     wv_model = KeyedVectors.load(model_path)
+    #distrib_list = list()
     for sentence1, sentence2 in progressbar(sentences_couples):
-        s1_words = word_tokenize(sentence1.lower())
-        s2_words = word_tokenize(sentence2.lower())
+        s1_words = sentence1.lower().split(" ")
+        s2_words = sentence2.lower().split(" ")
+        matrix = None
         try:
             s1_vectors = np.array([wv_model.get_vector(word) for word in s1_words])
             s2_vectors = np.array([wv_model.get_vector(word) for word in s2_words])
             s1_vectors_normalized = s1_vectors/np.linalg.norm(s1_vectors, axis=1, keepdims=True)
             s2_vectors_normalized = s2_vectors/np.linalg.norm(s2_vectors, axis=1, keepdims=True)
             matrix = s1_vectors_normalized.dot(s2_vectors_normalized.T)
-            dict_to_update[(sentence1, sentence2)] = matrix
-            dict_to_update[(sentence2, sentence1)] = matrix.T
+
+
         except:
             pass
 
+        if matrix is not None:
+            assert (np.all(matrix <= 1.1) and np.all(matrix >= -1.1))
+
+            assert (matrix.shape[0] == len(s1_words))
+            assert (matrix.shape[1] == len(s2_words))
+            #matrix = cossim2distance(matrix)
+            dict_to_update[(sentence1, sentence2)] = matrix
+            dict_to_update[(sentence2, sentence1)] = matrix.T
+
+
+
+
+            #distrib_list.extend(matrix.flatten().tolist())
+
+
+    #sns.distplot(distrib_list[:10000]+distrib_list[-10000:])
+    #plt.xlabel("Values")
+    #plt.ylabel("Density")
+    #plt.show()
+
 def bilingualMatrices(sentences_couples, model_path, dict_to_update):
+    #distrib_list = list()
     tt_model = dict()
     model_file = open(model_path)
     for line in model_file:
@@ -78,8 +168,8 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
 
 
     for sentence1, sentence2 in progressbar(sentences_couples):
-        s1_words = word_tokenize(sentence1.lower())
-        s2_words = word_tokenize(sentence2.lower())
+        s1_words = sentence1.lower().split(" ")
+        s2_words = sentence2.lower().split(" ")
         n = len(s1_words)
         m = len(s2_words)
         matrix = np.zeros((n, m), dtype=np.float32)
@@ -89,8 +179,17 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
                     matrix[i, j] = tt_model[(s1_words[i], s2_words[j])]
                 except:
                     matrix[i, j] = 0
-        matrix = (matrix * 2) - 1
+
+        assert(np.all(matrix <= 1) and np.all(matrix >= -1))
         dict_to_update[(sentence1, sentence2)] = matrix
+
+        #distrib_list.extend(matrix.flatten().tolist())
+
+
+    #sns.distplot(distrib_list[:10000]+distrib_list[-10000:])
+    #plt.xlabel("Values")
+    #plt.ylabel("Density")
+    #plt.show()
 
 
 def couple_sort(couple):
@@ -104,6 +203,8 @@ if __name__ == '__main__':
 
     #Argz parsing
     parser = argparse.ArgumentParser(description='Computes alignment matrices.')
+    parser.add_argument('--padding', dest='padding', action='store_true',
+                        help='Use the "Repeat words and add padding" to fulfill the matrix.')
     parser.add_argument('--input', dest='input_path', action='store',
                         help='Cuboid analogies textfile to proceed.')
     parser.add_argument('--output', dest='output_path', action='store',
@@ -119,7 +220,9 @@ if __name__ == '__main__':
     output_path = args.output_path
     model1_path = args.model1_path
     model2_path = args.model2_path
+    padding = args.padding
     bilingual_model_path = args.bilingual_model_path
+
 
 
     #Load sentences
@@ -150,9 +253,10 @@ if __name__ == '__main__':
             bilingual_couples.add((analogy[0][k], analogy[1][k]))
 
     matrices_dict = dict()
+
+    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
     monolingualMatrices(language1_couples, model1_path, matrices_dict)
     monolingualMatrices(language2_couples, model2_path, matrices_dict)
-    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
 
     #  From there, matrices_dict contains all the necessary matrices
     equivalent_analogies = [
@@ -163,8 +267,8 @@ if __name__ == '__main__':
     ]
 
 
-    keys, values = zip(*matrices_dict.items())
-    keys_index = {key: index for index, key in enumerate(keys)}
+    sentence_couples, values = zip(*matrices_dict.items())
+    keys_index = {key: index for index, key in enumerate(sentence_couples)}
 
     analogy_matrices_list = []
     analogies_lengths_list = []
@@ -196,20 +300,17 @@ if __name__ == '__main__':
                 pass
 
 
-
-
-    analogies_lengths_dict = dict()
+    biggest_sentence_length = 0
     for lengths in analogies_lengths_list:
-        try:
-            analogies_lengths_dict[lengths] += 1
-        except:
-            analogies_lengths_dict[lengths] = 1
-    print(len(analogies_lengths_dict))
+        biggest_sentence_length = max(biggest_sentence_length, max(lengths))
 
-    matrices = [reshaperMatrix(value, matrix_size) for _, value in enumerate(values)]
-    print(matrices[:3])
+    print("Length of the biggest sentence:", biggest_sentence_length)
+
+    matrices = [reshapeMatrix(value, biggest_sentence_length, padding=padding) for _, value in enumerate(values)]
+    sentence_couples = [(reshapeSentence(s1, biggest_sentence_length, padding),
+                         reshapeSentence(s1, biggest_sentence_length, padding)) for s1, s2 in sentence_couples]
     matrices = np.stack(matrices, axis=0)
-    np.savez(output_path, index=keys, analogies=analogy_matrices_list, matrices=matrices, lengths=analogies_lengths_list)
+    np.savez(output_path, index=sentence_couples, analogies=analogy_matrices_list, matrices=matrices, lengths=analogies_lengths_list)
 
 
 

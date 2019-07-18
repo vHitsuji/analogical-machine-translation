@@ -1,4 +1,5 @@
 python3 sentences2matrices.py \
+--padding \
 --input ../corpora/en-fr.cuboid.nlg \
 --output en-fr.matrices \
 --first_language_model ../model/wordvectors/FastText/en.kv \
