@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 
 
+
 from gensim.models import KeyedVectors, keyedvectors
 from nltk.tokenize import word_tokenize
 import numpy as np
 import argparse
 from progressbar import progressbar
 import matplotlib.pyplot as plt
+from random import shuffle
 import seaborn as sns
 from collections import Counter
 
@@ -199,6 +201,86 @@ def couple_sort(couple):
         return couple[1], couple[0]
 
 
+def proceed(cuboids, filename):
+
+    language1_couples = set()
+    language2_couples = set()
+    bilingual_couples = set()
+
+    for analogy in progressbar(cuboids):
+        language1_couples.add((analogy[0][0], analogy[0][1]))
+        language1_couples.add((analogy[0][2], analogy[0][3]))
+        language1_couples.add((analogy[0][0], analogy[0][2]))
+        language1_couples.add((analogy[0][1], analogy[0][3]))
+
+        language2_couples.add((analogy[1][0], analogy[1][1]))
+        language2_couples.add((analogy[1][2], analogy[1][3]))
+        language2_couples.add((analogy[1][0], analogy[1][2]))
+        language2_couples.add((analogy[1][1], analogy[1][3]))
+
+        for k in range(4):
+            bilingual_couples.add((analogy[0][k], analogy[1][k]))
+
+    matrices_dict = dict()
+
+    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
+    monolingualMatrices(language1_couples, model1_path, matrices_dict)
+    monolingualMatrices(language2_couples, model2_path, matrices_dict)
+
+    #  From there, matrices_dict contains all the necessary matrices
+    equivalent_analogies = [
+        [0, 1, 2, 3], [2, 3, 0, 1],
+        [0, 2, 1, 3], [1, 3, 0, 2],
+        [1, 0, 3, 2], [3, 2, 1, 0],
+        [2, 0, 3, 1], [3, 1, 2, 0]
+    ]
+
+    sentence_couples, values = zip(*matrices_dict.items())
+    keys_index = {key: index for index, key in enumerate(sentence_couples)}
+
+    analogy_matrices_list = []
+    analogies_lengths_list = []
+    for analogy in progressbar(cuboids):
+        for i0, i1, i2, i3 in equivalent_analogies:
+            try:
+                analogy_matrices = [
+                    keys_index[(analogy[0][i0], analogy[0][i1])],
+                    keys_index[(analogy[0][i1], analogy[1][i1])],
+                    keys_index[(analogy[0][i0], analogy[0][i2])],
+                    keys_index[(analogy[0][i2], analogy[1][i2])],
+                    keys_index[(analogy[1][i2], analogy[1][i3])],
+                    keys_index[(analogy[1][i1], analogy[1][i3])],
+
+                    keys_index[(analogy[0][i0], analogy[1][i0])],
+                    keys_index[(analogy[1][i0], analogy[1][i2])],
+                    keys_index[(analogy[1][i0], analogy[1][i1])],
+                ]
+                analogy_matrices_list.append(analogy_matrices)
+
+                la, lb = values[analogy_matrices[0]].shape
+                lc, lc2 = values[analogy_matrices[3]].shape
+                la2, lb2 = values[analogy_matrices[8]].shape
+                _, ld2 = values[analogy_matrices[4]].shape
+
+                analogies_lengths_list.append((la, lb, lc, lb2, lc2, ld2, la2))
+
+            except:
+                pass
+
+    biggest_sentence_length = 0
+    for lengths in analogies_lengths_list:
+        biggest_sentence_length = max(biggest_sentence_length, max(lengths))
+
+    print("Length of the biggest sentence:", biggest_sentence_length)
+
+    matrices = [reshapeMatrix(value, biggest_sentence_length, padding=padding) for _, value in enumerate(values)]
+    sentence_couples = [(reshapeSentence(s1, biggest_sentence_length, padding),
+                         reshapeSentence(s1, biggest_sentence_length, padding)) for s1, s2 in sentence_couples]
+    matrices = np.stack(matrices, axis=0)
+    np.savez(output_path + "." + filename, index=sentence_couples, analogies=analogy_matrices_list, matrices=matrices,
+             lengths=analogies_lengths_list)
+
+
 if __name__ == '__main__':
 
     #Argz parsing
@@ -230,87 +312,31 @@ if __name__ == '__main__':
     lines = input_file.read().splitlines()
     input_file.close()
     assert(len(lines) % 2 == 0)  # One analogy takes 2 lines. So there is an even number of lines.
-    language1_couples = set()
-    language2_couples = set()
-    bilingual_couples = set()
 
-    # for each analogy.
-    analogies = list()
-    for i in progressbar(range(0, len(lines), 2)):
-        analogies.append([lines[i].split("\t"), lines[i + 1].split("\t")])
-    for analogy in progressbar(analogies):
-        language1_couples.add((analogy[0][0], analogy[0][1]))
-        language1_couples.add((analogy[0][2], analogy[0][3]))
-        language1_couples.add((analogy[0][0], analogy[0][2]))
-        language1_couples.add((analogy[0][1], analogy[0][3]))
+    bilines_number = len(lines)//2
+    bilines_index = list(range(bilines_number))
+    shuffle(bilines_index)
+    train_number = int(0.8*bilines_number)
+    test_number = bilines_number - train_number
 
-        language2_couples.add((analogy[1][0], analogy[1][1]))
-        language2_couples.add((analogy[1][2], analogy[1][3]))
-        language2_couples.add((analogy[1][0], analogy[1][2]))
-        language2_couples.add((analogy[1][1], analogy[1][3]))
-
-        for k in range(4):
-            bilingual_couples.add((analogy[0][k], analogy[1][k]))
-
-    matrices_dict = dict()
-
-    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
-    monolingualMatrices(language1_couples, model1_path, matrices_dict)
-    monolingualMatrices(language2_couples, model2_path, matrices_dict)
-
-    #  From there, matrices_dict contains all the necessary matrices
-    equivalent_analogies = [
-        [0, 1, 2, 3], [2, 3, 0, 1],
-        [0, 2, 1, 3], [1, 3, 0, 2],
-        [1, 0, 3, 2], [3, 2, 1, 0],
-        [2, 0, 3, 1], [3, 1, 2, 0]
-    ]
+    train_cuboids = list()
+    test_cuboids = list()
+    for i in range(train_number):
+        line1 = lines[2*bilines_index[i]]
+        line2 = lines[2*bilines_index[i] + 1]
+        train_cuboids.append([line1.split("\t"), line2.split("\t")])
+    for i in range(train_number, bilines_number):
+        line1 = lines[2*bilines_index[i]]
+        line2 = lines[2*bilines_index[i] + 1]
+        test_cuboids.append([line1.split("\t"), line2.split("\t")])
 
 
-    sentence_couples, values = zip(*matrices_dict.items())
-    keys_index = {key: index for index, key in enumerate(sentence_couples)}
-
-    analogy_matrices_list = []
-    analogies_lengths_list = []
-    for analogy in progressbar(analogies):
-        for i0, i1, i2, i3 in equivalent_analogies:
-            try:
-                analogy_matrices = [
-                    keys_index[(analogy[0][i0], analogy[0][i1])],
-                    keys_index[(analogy[0][i1], analogy[1][i1])],
-                    keys_index[(analogy[0][i0], analogy[0][i2])],
-                    keys_index[(analogy[0][i2], analogy[1][i2])],
-                    keys_index[(analogy[1][i2], analogy[1][i3])],
-                    keys_index[(analogy[1][i1], analogy[1][i3])],
-
-                    keys_index[(analogy[0][i0], analogy[1][i0])],
-                    keys_index[(analogy[1][i0], analogy[1][i2])],
-                    keys_index[(analogy[1][i0], analogy[1][i1])],
-                ]
-                analogy_matrices_list.append(analogy_matrices)
-
-                la, lb = values[analogy_matrices[0]].shape
-                lc, lc2 = values[analogy_matrices[3]].shape
-                la2, lb2 = values[analogy_matrices[8]].shape
-                _, ld2 = values[analogy_matrices[4]].shape
-
-                analogies_lengths_list.append((la, lb, lc, lb2, lc2, ld2, la2))
-
-            except:
-                pass
 
 
-    biggest_sentence_length = 0
-    for lengths in analogies_lengths_list:
-        biggest_sentence_length = max(biggest_sentence_length, max(lengths))
+    proceed(train_cuboids, "train")
+    proceed(test_cuboids, "test")
 
-    print("Length of the biggest sentence:", biggest_sentence_length)
 
-    matrices = [reshapeMatrix(value, biggest_sentence_length, padding=padding) for _, value in enumerate(values)]
-    sentence_couples = [(reshapeSentence(s1, biggest_sentence_length, padding),
-                         reshapeSentence(s1, biggest_sentence_length, padding)) for s1, s2 in sentence_couples]
-    matrices = np.stack(matrices, axis=0)
-    np.savez(output_path, index=sentence_couples, analogies=analogy_matrices_list, matrices=matrices, lengths=analogies_lengths_list)
 
 
 

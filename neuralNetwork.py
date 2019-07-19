@@ -4,149 +4,104 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils import data
 import numpy as np
+import matplotlib.pyplot as plt
 from progressbar import progressbar
 from math import sqrt
 
 
-matrix_length = 13
-matrix_size = matrix_length*matrix_length
+def printMatrix(matrix, s1_words=None, s2_words=None):
+    """
+    Print an alignment matrix with given string as axis scale.
+    Do not forget to plt.show() when you want to show the matrix.
+    :param matrix: Matrix to show.
+    :param s1_words: x_axis sentence.
+    :param s2_words: y_axis sentence.
+    :return: None
+    """
+    plt.matshow(matrix, cmap="gray_r")
+    if s1_words is not None and s1_words is not None:
+        plt.xticks(range(len(s2_words)), s2_words)
+        plt.yticks(range(len(s1_words)), s1_words)
+
 
 class simpleLinear(nn.Module):
-
-    def __init__(self, matrix_length):
+    """ Always output one matrix"""
+    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5)):
         super(simpleLinear, self).__init__()
+        self.__input_matrices = input_matrices
+        self.__matrix_length = matrix_length
+        self.__matrix_size = self.__matrix_length * self.__matrix_length
+        self.__input_size = len(input_matrices)
+        self.__linearLayer = nn.Linear(self.__input_size * self.matrix_size, self.matrix_size)
 
-        self.matrix_length = matrix_length
-        self.matrix_size = self.matrix_length * self.matrix_length
-
-        self.bilingual = nn.Linear(4 * self.matrix_size, self.matrix_size)
-        self.monolingual1 = nn.Linear(4 * self.matrix_size, self.matrix_size)
-        self.monolingual2 = nn.Linear(4 * self.matrix_size, self.matrix_size)
-
-    def forward(self, x):
-        m0123 = x[:, [0, 1, 2, 3], :, :].view(-1, 4 * self.matrix_size)
-        m2345 = x[:, [2, 3, 4, 5], :, :].view(-1, 4 * self.matrix_size)
-        m0154 = x[:, [0, 1, 5, 4], :, :].view(-1, 4 * self.matrix_size)
-        m6 = self.bilingual(m0123)
-        m7 = self.monolingual1(m2345)
-        m8 = self.monolingual2(m0154)
-
-        result = torch.cat((m6, m7, m8), 1)
-        return result
-
+    def forward(self, batch):
+        batch = batch[:, self.__input_matrices, :, :].view(-1, self.__input_size * self.matrix_size)
+        batch = self.__linearLayer(batch).view(-1, self.__matrix_length, self.__matrix_length)
+        return batch
 
 
 class simpleDense(nn.Module):
 
-    def __init__(self, matrix_length):
+    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=1, pixel_mode=False,
+                 layers_size=None):
         super(simpleDense, self).__init__()
+        self.__input_matrices = input_matrices
+        self.__input_size = len(input_matrices)  # Number of matrices in the input
+        self.__output_size = output_size  # Number of matrices in the output
+        self.__matrix_length = matrix_length
+        self.__matrix_size = self.__matrix_length * self.__matrix_length
+        self.__pixel_mode = pixel_mode
 
-        self.matrix_length = matrix_length
-        self.matrix_size = self.matrix_length * self.matrix_length
+        if layers_size is not None:
+            self.__layers__size = [x*self.__matrix_size for x in layers_size]
+        else:
+            first_size = self.__input_size*self.__matrix_size
+            if self.__pixel_mode:
+                second_size = self.__matrix_size
+            else:
+                second_size = self.__output_size*self.__matrix_size*2
+            self.__layers__size = [first_size, second_size]
 
-        self.layers_size = [8*self.matrix_size,8*self.matrix_size]
+        self.__layers_size = [8*self.__matrix_size, 8*self.__matrix_size]
 
-        # Initiates layers in 3 channels
-        self.channels = list()
-        for channel_index in range(3):
-            channel = list()
-            channel.append(nn.Linear(4 * self.matrix_size, self.layers_size[0]))
-            for layer_index in range(len(self.layers_size)-1):
-                channel.append(nn.Linear(self.layers_size[layer_index], self.layers_size[layer_index+1]))
-            channel.append(nn.Linear(self.layers_size[-1], self.matrix_size))
+        layers = list()
+        layers.append(nn.Linear(self.__input_size * self.__matrix_size, self.__layers_size[0]))
+        for layer_index in range(len(self.__layers_size)-1):
+            layers.append(nn.Linear(self.__layers_size[layer_index], self.__layers_size[layer_index+1]))
+        if self.__pixel_mode:
+            layers.append(nn.Linear(self.__layers_size[-1], 1))
+        else:
+            layers.append(nn.Linear(self.__layers_size[-1], self.__output_size*self.__matrix_size))
 
-            self.channels.append(nn.ModuleList(channel))
-        self.channels = nn.ModuleList(self.channels)
-
-
-
-    def forward(self, batch):
-        m0123 = batch[:, [0, 1, 2, 3], :, :].view(-1, 4 * self.matrix_size)
-        m2345 = batch[:, [2, 3, 4, 5], :, :].view(-1, 4 * self.matrix_size)
-        m0154 = batch[:, [0, 1, 5, 4], :, :].view(-1, 4 * self.matrix_size)
-
-        input_list = [m0123, m2345, m0154]
-        output_list = list()
-        for channel_index in range(3):
-            x = input_list[channel_index]
-            for layer_index in range(len(self.channels[channel_index])-1):
-                x = F.relu(self.channels[channel_index][layer_index](x))
-            x = torch.tanh(self.channels[channel_index][-1](x))
-            output_list.append(x)
-
-        m6, m7, m8 = output_list
-
-        result = torch.cat((m6, m7, m8), 1)
-        return result
-
-class simplePixelDense(nn.Module):
-
-    def __init__(self, matrix_length):
-        super(simplePixelDense, self).__init__()
-
-        self.matrix_length = matrix_length
-        self.matrix_size = self.matrix_length * self.matrix_length
-
-        self.layers_size = [5*self.matrix_size, int(sqrt(5*self.matrix_size))+1]
-
-        # Initiates layers in 3 channels
-        self.channels = list()
-        for channel_index in range(3):
-            channel = list()
-            channel.append(nn.Linear(5 * self.matrix_size, self.layers_size[0]))
-            for layer_index in range(len(self.layers_size)-1):
-                channel.append(nn.Linear(self.layers_size[layer_index], self.layers_size[layer_index+1]))
-            channel.append(nn.Linear(self.layers_size[-1], 1))
-
-            self.channels.append(nn.ModuleList(channel))
-        self.channels = nn.ModuleList(self.channels)
+        self.__layers = nn.ModuleList(layers)
 
 
 
     def forward(self, batch):
-        m0123 = batch[:, [0, 1, 2, 3, 6], :, :].view(-1, 5 * self.matrix_size) #Last matrix is pixel position encoding
-        m2345 = batch[:, [2, 3, 4, 5, 6], :, :].view(-1, 5 * self.matrix_size)
-        m0154 = batch[:, [0, 1, 5, 4, 6], :, :].view(-1, 5 * self.matrix_size)
+        batch = batch[:, self.__input_matrices, :, :].view(-1, self.__input_size * self.__matrix_size)
 
-        input_list = [m0123, m2345, m0154]
-        output_list = list()
-        for channel_index in range(3):
-            x = input_list[channel_index]
-            for layer_index in range(len(self.channels[channel_index])-1):
-                x = F.relu(self.channels[channel_index][layer_index](x))
-            x = torch.tanh(self.channels[channel_index][-1](x))
-            output_list.append(x)
+        for layer_index in range(len(self.__layers)-1):
+            batch = F.relu(self.__layers[layer_index](batch))
+        batch = torch.tanh(self.__layers[-1](batch))
 
-        m6, m7, m8 = output_list
+        if not self.__pixel_mode:
+            batch = batch.view(-1, self.__output_size, self.__matrix_length, self.__matrix_length)
+        return batch
 
-        result = torch.cat((m6, m7, m8), 1)
-        return result
 
 
 class cuboidDataset(data.Dataset):
-    def __init__(self, matrices_file_path, pixel_mode=False):
+    def __init__(self, matrices_file_path):
         dataset = np.load(matrices_file_path)
-
-        self.__pixel_mode = pixel_mode
 
         self.__analogies_index = dataset["analogies"]
         self.__sentence_couples_index = dataset["index"]
         self.__matrices = dataset["matrices"]
         self.__matrix_length = self.__matrices.shape[1]
         self.__matrix_size = self.__matrices.shape[1]*self.__matrices.shape[2]
-        assert(self.__matrix_size == 13*13)
+        assert(self.__matrix_size == 10*10)
 
-        if self.__pixel_mode:
-            self.__length = len(self.__analogies_index)*self.__matrix_size
-            self.__position_encodings = list()
-            for i in range(self.__matrix_length):
-                for j in range(self.__matrix_length):
-                    matrix = (-1)*np.ones((self.__matrix_length, self.__matrix_length), dtype=np.float)
-                    matrix[i, j] = 1
-                    self.__position_encodings.append(matrix)
-            self.__position_encodings = torch.from_numpy(np.array(self.__position_encodings)).float()
-        else:
-            self.__length = len(self.__analogies_index)
+        self.__length = len(self.__analogies_index)
 
         self.__analogies_lengths = dataset["lengths"]
 
@@ -156,36 +111,47 @@ class cuboidDataset(data.Dataset):
         self.__analogies_lengths = self.__analogies_lengths.float()
 
 
+    def getmatrixlength(self):
+        return self.__matrix_length
+
+    def getmatrixsize(self):
+        return self.__matrix_size
+
     def __len__(self):
         return self.__length
 
     def __getitem__(self, index):
 
-        if self.__pixel_mode:
-            analogy_index, pixel_index = divmod(index, self.__matrix_size)
-            x_index, y_index = divmod(pixel_index, self.__matrix_length)
-
-            matrices_indices = self.__analogies_index[analogy_index]
-
-            input_example = torch.cat(
-                (
-                    self.__matrices[matrices_indices[:6], :, :],
-                    torch.unsqueeze(self.__position_encodings[pixel_index], 0)
-                ),
-                0)
-            truth = self.__matrices[matrices_indices[6:], x_index, y_index]
-
-            return input_example, truth
+        matrices_indices = self.__analogies_index[index]
+        return self.__matrices[matrices_indices[:6], :, :], \
+            self.__matrices[matrices_indices[6:], :, :]
 
 
-        else:
-            matrices_indices = self.__analogies_index[index]
-            return self.__matrices[matrices_indices[:6], :, :], \
-                self.__matrices[matrices_indices[6:], :, :]
+class matricesLoss(torch.nn.modules.loss.MSELoss):
+
+    def __init__(self, input_matrices=(6, 7, 8)):
+        super(matricesLoss, self).__init__(None, None, 'mean')
+        self.__input_matrices = input_matrices
+
+    def forward(self, input, target):
+        return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
 
 
+class pixelLoss(torch.nn.modules.loss.MSELoss):
 
+    def __init__(self, input_matrix, input_pixel):
+        super(pixelLoss, self).__init__(None, None, 'mean')
+        self.__input_matrix = input_matrix
+        self.__pixel_x = input_pixel[0]
+        self.__pixel_y = input_pixel[1]
 
+    def forward(self, input, target):
+
+        return F.mse_loss(input, target[:, self.__input_matrix, self.__pixel_x, self.__pixel_y].view(-1, 1),
+                          reduction=self.reduction)
+
+    #def __call__(self, *input, **kwargs):
+        #return super(pixelLoss, self).__call__(self, *input, **kwargs)
 
 def train_matrices():
     print("Is cuda available?", torch.cuda.is_available() )
@@ -195,42 +161,100 @@ def train_matrices():
               'num_workers': 4}
     max_epochs = 10
 
-    training_set = cuboidDataset("en-fr.matrices.npz", pixel_mode=True)
+    training_set = cuboidDataset("en-fr.matrices.train.npz")
     training_generator = data.DataLoader(training_set, **params)
+    test_set = cuboidDataset("en-fr.matrices.test.npz")
+    test_generator = data.DataLoader(test_set, **params)
 
-    net = simplePixelDense(matrix_length).to(device)
+
+    matrix_length = training_set.getmatrixlength()
+    net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True).to(device)
     print("Net architecture:")
     print(net)
-    optimizer = optim.Adam(net.parameters(), lr=0.001)
-    criterion = torch.nn.MSELoss(reduction="none")
+    criterion = pixelLoss(1, (6, 7))
 
 
-    print_frequency = 100
+    print_frequency = 2000
+    batch_counter = 0
+
+    train_loss = list()
+    test_loss = list()
 
     for epoch in range(max_epochs):
-
+        
+        optimizer = optim.Adam(net.parameters(), lr=0.1**(3+epoch/10))
         running_loss = 0.0
         # Training
+        epoch_train_loss = list()
+        epoch_train_batch = list()
         for i, (local_batch, local_truths) in enumerate(training_generator):
+
 
             local_batch, local_truths = local_batch.to(device), local_truths.to(device)
 
             optimizer.zero_grad()
             outputs = net(local_batch)
-            squares = criterion(outputs, local_truths.view(-1, 3))
-            #squares = criterion(outputs, local_truths.view(-1, 3 * matrix_size))
-            loss = torch.mean(squares)
+            loss = criterion(outputs, local_truths)
             loss.backward()
             optimizer.step()
 
             # print statistics
             running_loss += loss.item()
             if i % print_frequency == print_frequency-1:    # print every 2000 mini-batches
-                print('[%d, %5d] loss: %.5f' %
+                compare = torch.stack((outputs.view(-1), local_truths[:, 1, 6, 7]), dim=0)
+                #printMatrix(compare.cpu().detach().numpy())
+                #plt.savefig(str(epoch) + str(i) + '.png')
+                #plt.clf()
+                #plt.close()
+                avg_loss = running_loss / print_frequency
+                epoch_train_loss.append(avg_loss)
+                epoch_train_batch.append(batch_counter)
+                batch_counter+=1
+
+
+                print('[%d, %5d] train loss: %.5f' %
+                      (epoch + 1, i + 1, avg_loss))
+                running_loss = 0.0
+
+        train_loss.append([epoch_train_batch, epoch_train_loss])
+
+        epoch_test_loss = list()
+        epoch_test_batch = list()
+        for i, (local_batch, local_truths) in enumerate(test_generator):
+
+            local_batch, local_truths = local_batch.to(device), local_truths.to(device)
+
+            optimizer.zero_grad()
+            outputs = net(local_batch, requires_grad = False)
+            loss = criterion(outputs, local_truths, requires_grad = False)
+
+            # print statistics
+            running_loss += loss.item()
+            if i % print_frequency == print_frequency-1:    # print every 2000 mini-batches
+                compare = torch.stack((outputs.view(-1), local_truths[:, 1, 6, 7]), dim=0)
+                printMatrix(compare.cpu().detach().numpy())
+                plt.savefig(str(epoch) + str(i) + '.png')
+                plt.clf()
+                plt.close()
+
+                avg_loss = running_loss / print_frequency
+                epoch_test_loss.append(avg_loss)
+                epoch_test_batch.append(batch_counter)
+                batch_counter += 1
+
+                print('[%d, %5d] test loss: %.5f' %
                       (epoch + 1, i + 1, running_loss / print_frequency))
                 running_loss = 0.0
-                print("max: ", torch.max(squares).item())
+        test_loss.append([epoch_test_batch, epoch_test_loss])
 
+        for element in train_loss:
+            plt.plot([element[0], element[1]], color="red")
+        for element in test_loss:
+            plt.plot([element[0], element[1]], color="green")
+        plt.savefig('epochloss.png')
+
+        plt.clf()
+        plt.close()
 
 
 train_matrices()
