@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from progressbar import progressbar
 from math import sqrt
-
+from itertools import cycle
 
 def printMatrix(matrix, s1_words=None, s2_words=None):
     """
@@ -26,13 +26,14 @@ def printMatrix(matrix, s1_words=None, s2_words=None):
 
 class simpleLinear(nn.Module):
     """ Always output one matrix"""
-    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5)):
+    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=1):
         super(simpleLinear, self).__init__()
         self.__input_matrices = input_matrices
         self.__matrix_length = matrix_length
         self.__matrix_size = self.__matrix_length * self.__matrix_length
         self.__input_size = len(input_matrices)
-        self.__linearLayer = nn.Linear(self.__input_size * self.matrix_size, self.matrix_size)
+        self.__output_size = output_size
+        self.__linearLayer = nn.Linear(self.__input_size * self.matrix_size, self.__output_size*self.matrix_size)
 
     def forward(self, batch):
         batch = batch[:, self.__input_matrices, :, :].view(-1, self.__input_size * self.matrix_size)
@@ -42,8 +43,7 @@ class simpleLinear(nn.Module):
 
 class simpleDense(nn.Module):
 
-    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=1, pixel_mode=False,
-                 layers_size=None):
+    def __init__(self, matrix_length, layers_size, input_matrices, output_size=1, pixel_mode=False):
         super(simpleDense, self).__init__()
         self.__input_matrices = input_matrices
         self.__input_size = len(input_matrices)  # Number of matrices in the input
@@ -52,17 +52,10 @@ class simpleDense(nn.Module):
         self.__matrix_size = self.__matrix_length * self.__matrix_length
         self.__pixel_mode = pixel_mode
 
-        if layers_size is not None:
-            self.__layers__size = [x*self.__matrix_size for x in layers_size]
-        else:
-            first_size = self.__input_size*self.__matrix_size
-            if self.__pixel_mode:
-                second_size = self.__matrix_size
-            else:
-                second_size = self.__output_size*self.__matrix_size*2
-            self.__layers__size = [first_size, second_size]
 
-        self.__layers_size = [8*self.__matrix_size, 8*self.__matrix_size]
+        self.__layers_size = layers_size
+
+
 
         layers = list()
         layers.append(nn.Linear(self.__input_size * self.__matrix_size, self.__layers_size[0]))
@@ -129,9 +122,9 @@ class cuboidDataset(data.Dataset):
 
 class matricesLoss(torch.nn.modules.loss.MSELoss):
 
-    def __init__(self, input_matrices=(6, 7, 8)):
+    def __init__(self, input_matrices):
         super(matricesLoss, self).__init__(None, None, 'mean')
-        self.__input_matrices = input_matrices
+        self.__input_matrices = [x-6 for x in input_matrices]
 
     def forward(self, input, target):
         return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
@@ -141,7 +134,7 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
 
     def __init__(self, input_matrix, input_pixel):
         super(pixelLoss, self).__init__(None, None, 'mean')
-        self.__input_matrix = input_matrix
+        self.__input_matrix = input_matrix - 6
         self.__pixel_x = input_pixel[0]
         self.__pixel_y = input_pixel[1]
 
@@ -150,111 +143,158 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
         return F.mse_loss(input, target[:, self.__input_matrix, self.__pixel_x, self.__pixel_y].view(-1, 1),
                           reduction=self.reduction)
 
-    #def __call__(self, *input, **kwargs):
-        #return super(pixelLoss, self).__call__(self, *input, **kwargs)
 
-def train_matrices():
+
+def smoothing(l, level=3):
+    result_list = list()
+    for i in range(len(l) - level):
+        sum = 0
+        for j in range(level):
+            sum += l[i+j]
+        result_list.append(sum/level)
+    return result_list
+
+
+def train(net, training_set, test_set, truth_index, pixel_mode=False ,save_path=None, verbose=False, initial_lr=0.01, decay=0.5, num_workers=0):
     print("Is cuda available?", torch.cuda.is_available() )
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    
     params = {'batch_size': 64,
               'shuffle': True,
-              'num_workers': 4}
-    max_epochs = 10
+              'num_workers': num_workers}
 
-    training_set = cuboidDataset("en-fr.matrices.train.npz")
+    net.to(device)
+
+
     training_generator = data.DataLoader(training_set, **params)
-    test_set = cuboidDataset("en-fr.matrices.test.npz")
-    test_generator = data.DataLoader(test_set, **params)
+    test_generator = cycle(data.DataLoader(test_set, **params))
+
+    print("Generators loaded")
 
 
-    matrix_length = training_set.getmatrixlength()
-    net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True).to(device)
     print("Net architecture:")
     print(net)
-    criterion = pixelLoss(1, (6, 7))
 
+    if pixel_mode:
+        criterion = pixelLoss(truth_index[0], (truth_index[1], truth_index[2]))
+    else:
+        criterion = matricesLoss(truth_index)
 
-    print_frequency = 2000
-    batch_counter = 0
+    print_frequency = 1000
+    average_test_loss = float("inf")
+    continue_training = True
+    epoch = 0
 
-    train_loss = list()
-    test_loss = list()
-
-    for epoch in range(max_epochs):
+    while continue_training:
         
-        optimizer = optim.Adam(net.parameters(), lr=0.1**(3+epoch/10))
-        running_loss = 0.0
+        
+    
+        optimizer = optim.Adam(net.parameters(), lr=initial_lr*(0.1 ** (decay*epoch)))
+        running_test_loss = 0.0
+        running_training_loss = 0.0
         # Training
         epoch_train_loss = list()
-        epoch_train_batch = list()
-        for i, (local_batch, local_truths) in enumerate(training_generator):
-
-
-            local_batch, local_truths = local_batch.to(device), local_truths.to(device)
+        epoch_test_loss = list()
+        for train_index, (train_batch, train_truth) in enumerate(training_generator):
+            batch, truth = train_batch.to(device), train_truth.to(device)
 
             optimizer.zero_grad()
-            outputs = net(local_batch)
-            loss = criterion(outputs, local_truths)
-            loss.backward()
+            outputs = net(batch)
+            training_loss = criterion(outputs, truth)
+            epoch_train_loss.append(training_loss.item())
+            training_loss.backward()
             optimizer.step()
 
-            # print statistics
-            running_loss += loss.item()
-            if i % print_frequency == print_frequency-1:    # print every 2000 mini-batches
-                compare = torch.stack((outputs.view(-1), local_truths[:, 1, 6, 7]), dim=0)
-                #printMatrix(compare.cpu().detach().numpy())
-                #plt.savefig(str(epoch) + str(i) + '.png')
-                #plt.clf()
-                #plt.close()
-                avg_loss = running_loss / print_frequency
-                epoch_train_loss.append(avg_loss)
-                epoch_train_batch.append(batch_counter)
-                batch_counter+=1
+            with torch.no_grad():
+                batch, truth = next(test_generator)
+                batch, truth = batch.to(device), truth.to(device)
+
+                outputs = net(batch)
+                test_loss = criterion(outputs, truth)
+                epoch_test_loss.append(test_loss.item())
+
+            if verbose:
+                running_test_loss += test_loss.item()
+                running_training_loss += training_loss.item()
+                if train_index % print_frequency == print_frequency - 1:    # print every print_frequency mini-batches
+                    # Attention lookup
+                    #optimizer.zero_grad()
+                    #outputs[0].backward()
+                    #params = [x.grad.cpu().detach().numpy() for x in list(net.parameters())]
+                    #product_param =  params[4].dot(params[2]).dot(params[0]).reshape(40, 10)
+                    #printMatrix(product_param)
+                    #plt.show()
+
+                    # Error lookup (to add to the loss function and refactor)
+                    #compare = torch.stack((outputs.view(-1), local_truths[:, 1, 6, 7]), dim=0)
+                    #compare = torch.stack((outputs.view(-1), local_truths[:, 1, 1, 1]), dim=0)
+                    #printMatrix(compare.cpu().detach().numpy())
+                    #plt.savefig("./trainimg/" + str(epoch) + str(i) + '.png')
+                    #plt.clf()
+                    #plt.close()
+
+                    print('[%d, %5d] training loss: %.5f test loss: %.5f' %
+                          (epoch, train_index+1, running_training_loss/print_frequency, running_test_loss/print_frequency))
+                    running_training_loss = 0.0
+                    running_test_loss = 0.0
 
 
-                print('[%d, %5d] train loss: %.5f' %
-                      (epoch + 1, i + 1, avg_loss))
-                running_loss = 0.0
-
-        train_loss.append([epoch_train_batch, epoch_train_loss])
-
-        epoch_test_loss = list()
-        epoch_test_batch = list()
-        for i, (local_batch, local_truths) in enumerate(test_generator):
-
-            local_batch, local_truths = local_batch.to(device), local_truths.to(device)
-
-            optimizer.zero_grad()
-            outputs = net(local_batch, requires_grad = False)
-            loss = criterion(outputs, local_truths, requires_grad = False)
-
-            # print statistics
-            running_loss += loss.item()
-            if i % print_frequency == print_frequency-1:    # print every 2000 mini-batches
-                compare = torch.stack((outputs.view(-1), local_truths[:, 1, 6, 7]), dim=0)
-                printMatrix(compare.cpu().detach().numpy())
-                plt.savefig(str(epoch) + str(i) + '.png')
-                plt.clf()
-                plt.close()
-
-                avg_loss = running_loss / print_frequency
-                epoch_test_loss.append(avg_loss)
-                epoch_test_batch.append(batch_counter)
-                batch_counter += 1
-
-                print('[%d, %5d] test loss: %.5f' %
-                      (epoch + 1, i + 1, running_loss / print_frequency))
-                running_loss = 0.0
-        test_loss.append([epoch_test_batch, epoch_test_loss])
-
-        for element in train_loss:
-            plt.plot([element[0], element[1]], color="red")
-        for element in test_loss:
-            plt.plot([element[0], element[1]], color="green")
-        plt.savefig('epochloss.png')
-
-        plt.clf()
-        plt.close()
 
 
-train_matrices()
+        #plt.plot(smoothing(epoch_train_loss, level=1000), color="red", label="train")
+        #plt.plot(smoothing(epoch_test_loss, level=1000), color="green", label="test")
+        #plt.savefig('epoch' + str(epoch) + '.loss.pdf')
+        #plt.clf()
+        #plt.close()
+
+
+
+        new_average_test_loss = sum(epoch_test_loss[-1000:])/1000
+        if new_average_test_loss < average_test_loss:
+            average_test_loss = new_average_test_loss
+            print("epoch", epoch, " loss: ", average_test_loss)
+            if save_path is not None:
+                torch.save(net.state_dict(), save_path)
+            epoch += 1
+        else:
+            continue_training = False
+    return float(average_test_loss)
+
+
+
+
+training_set = cuboidDataset("en-fr.matrices.train.npz")
+test_set = cuboidDataset("en-fr.matrices.test.npz")
+matrix_length = training_set.getmatrixlength()
+
+one_layer_loss = np.array((10, 1))
+for i in progressbar(range(1, 11)):
+    net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True, layers_size=[i*10])
+    final_loss = train(net, training_set, test_set, truth_index=(7, 6, 7), pixel_mode=True)
+    one_layer_loss[i, 1] = final_loss
+    plt.matshow(one_layer_loss)
+    plt.savefig("one_layer_loss.pdf")
+    plt.clf()
+    plt.close()
+
+index_list = list()
+for i in range(1, 11):
+    for j in range(1, 11):
+        index_list.append(i*j, i, j)
+index_list = sorted(index_list)
+
+two_layer_loss = np.array((10, 10))
+for _, i, j in progressbar(index_list):
+    net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True, layers_size=[i*10, j*10])
+    final_loss = train(net, training_set, test_set, truth_index=(7, 6, 7), pixel_mode=True)
+    one_layer_loss[i, j] = final_loss
+    plt.matshow(one_layer_loss)
+    plt.savefig("two_layer_loss.pdf")
+    plt.clf()
+    plt.close()
+
+
+
+
+
+print(final_loss)
