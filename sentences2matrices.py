@@ -119,11 +119,9 @@ def reshapeMatrix(matrix, size, padding=False):
 
 
 
-
-
-def monolingualMatrices(sentences_couples, model_path, dict_to_update):
+def monolingualMatrices(sentences_couples, model_path, dict_to_update, distrib_path=None):
     wv_model = KeyedVectors.load(model_path)
-    #distrib_list = list()
+    distrib_list = list()
     for sentence1, sentence2 in progressbar(sentences_couples):
         s1_words = sentence1.lower().split(" ")
         s2_words = sentence2.lower().split(" ")
@@ -147,20 +145,19 @@ def monolingualMatrices(sentences_couples, model_path, dict_to_update):
             #matrix = cossim2distance(matrix)
             dict_to_update[(sentence1, sentence2)] = matrix
             dict_to_update[(sentence2, sentence1)] = matrix.T
+            distrib_list.extend(matrix.flatten().tolist())
+
+    if distrib_path is not None:
+        sns.distplot(distrib_list, kde=False)
+        plt.xlabel("Values")
+        plt.ylabel("Density")
+        plt.savefig(distrib_path + '.pdf')
+        plt.clf()
+        plt.close()
 
 
-
-
-            #distrib_list.extend(matrix.flatten().tolist())
-
-
-    #sns.distplot(distrib_list[:10000]+distrib_list[-10000:])
-    #plt.xlabel("Values")
-    #plt.ylabel("Density")
-    #plt.show()
-
-def bilingualMatrices(sentences_couples, model_path, dict_to_update):
-    #distrib_list = list()
+def bilingualMatrices(sentences_couples, model_path, dict_to_update, distrib_path=None):
+    distrib_list = list()
     tt_model = dict()
     model_file = open(model_path)
     for line in model_file:
@@ -185,13 +182,17 @@ def bilingualMatrices(sentences_couples, model_path, dict_to_update):
         assert(np.all(matrix <= 1) and np.all(matrix >= -1))
         dict_to_update[(sentence1, sentence2)] = matrix
 
-        #distrib_list.extend(matrix.flatten().tolist())
+        distrib_list.extend(matrix.flatten().tolist())
 
 
-    #sns.distplot(distrib_list[:10000]+distrib_list[-10000:])
-    #plt.xlabel("Values")
-    #plt.ylabel("Density")
-    #plt.show()
+
+    if distrib_path is not None:
+        sns.distplot(distrib_list, kde=False)
+        plt.xlabel("Values")
+        plt.ylabel("Density")
+        plt.savefig(distrib_path + '.pdf')
+        plt.clf()
+        plt.close()
 
 
 def couple_sort(couple):
@@ -223,9 +224,9 @@ def proceed(cuboids, filename):
 
     matrices_dict = dict()
 
-    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict)
-    monolingualMatrices(language1_couples, model1_path, matrices_dict)
-    monolingualMatrices(language2_couples, model2_path, matrices_dict)
+    bilingualMatrices(bilingual_couples, bilingual_model_path, matrices_dict, distrib_path=filename + ".bilingual" )
+    monolingualMatrices(language1_couples, model1_path, matrices_dict, distrib_path=filename + ".l1")
+    monolingualMatrices(language2_couples, model2_path, matrices_dict, distrib_path=filename + ".l2")
 
     #  From there, matrices_dict contains all the necessary matrices
     equivalent_analogies = [
