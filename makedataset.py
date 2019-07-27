@@ -24,11 +24,6 @@ except ImportError:
     def progressbar(x):
         return x
 
-
-
-
-
-
 def drawMatrix(matrix, x_axis=None, y_axis=None):
     """
     Draw an alignment matrix with given string as axis scale.
@@ -133,12 +128,12 @@ def reshapeMatrix(matrix, targetsize, fill=False):
 
 
 
-def monolingualMatrices(sentence_pairs, model_path, dict_to_update, distance_mode=False):
+def monolingualMatrices(sentence_pairs, model, dict_to_update, distance_mode=False):
     """
     Builds monolingual alignment matrices using cosine similarities given by a word embedding model.
 
     :param sentence_pairs: A list of pairs of strings representing sentences, each pair becomes a matrix.
-    :param model_path: Path to the word embedding model to use.
+    :param model: Gensim's KeyedVectors model object.
         Should be compatible with the Gensim's KeyedVectors.load() method.
     :param dict_to_update: The matrices are stored in the this dictionary (pointer passing),
         the keys are the sentences pairs.
@@ -146,14 +141,13 @@ def monolingualMatrices(sentence_pairs, model_path, dict_to_update, distance_mod
     :return: None (the dictionary is updated with side effect).
     """
 
-    wv_model = KeyedVectors.load(model_path)  # Loads the word embedding model.
     for sentence1, sentence2 in progressbar(sentence_pairs):
         s1_words = sentence1.lower().split(" ")
         s2_words = sentence2.lower().split(" ")
         matrix = None
         try:
-            s1_vectors = np.array([wv_model.get_vector(word) for word in s1_words])
-            s2_vectors = np.array([wv_model.get_vector(word) for word in s2_words])
+            s1_vectors = np.array([model.get_vector(word) for word in s1_words])
+            s2_vectors = np.array([model.get_vector(word) for word in s2_words])
             s1_vectors_normalized = s1_vectors/np.linalg.norm(s1_vectors, axis=1, keepdims=True)
             s2_vectors_normalized = s2_vectors/np.linalg.norm(s2_vectors, axis=1, keepdims=True)
             # Computes efficiently all cosines using matrices dot product.
@@ -269,8 +263,11 @@ def datasetfromcuboids(cuboids, first_model_path, second_model_path, bilingual_m
     matrices_dict = dict()
 
     # Builds the matrices and updates the dictionary with side effect.
+    print("Computing bilingual matrices.")
     bilingualMatrices(bilingual_pairs, bilingual_model_path, matrices_dict)
+    print("Computing first language monolingual matrices.")
     monolingualMatrices(first_language_pairs, first_model_path, matrices_dict)
+    print("Computing second language monolingual matrices.")
     monolingualMatrices(second_language_pairs, second_model_path, matrices_dict)
     #  From there, matrices_dict contains all the necessary matrices to build the dataset.
 
@@ -289,6 +286,7 @@ def datasetfromcuboids(cuboids, first_model_path, second_model_path, bilingual_m
     sentence_pairs_index = {key: index for index, key in enumerate(sentence_pairs)}
     analogy_matrices_list = []
     analogies_lengths_list = []
+    print("Making the index with data augmentation (rotating cuboids along languages axis).")
     for analogies_pair in progressbar(cuboids):
         for i0, i1, i2, i3 in equivalent_analogies:
             try:
@@ -321,20 +319,22 @@ def datasetfromcuboids(cuboids, first_model_path, second_model_path, bilingual_m
     for lengths in analogies_lengths_list:
         biggest_sentence_length = max(biggest_sentence_length, max(lengths))
 
-    print("Length of the biggest sentence:", biggest_sentence_length)
-
+    print("Reshaping matrices and resizing sentences...", end="", flush=True)
     # Reshape matrices and resize sentences to the length of the biggest sentence.
     matrices = [reshapeMatrix(value, biggest_sentence_length, fill=fill) for value in matrices]
     sentence_pairs = [
         (resizeSentence(s1, biggest_sentence_length, fill),
          resizeSentence(s1, biggest_sentence_length, fill)) for s1, s2 in sentence_pairs]
+    print(" Done.")
 
     # Stacks all matrices into a big 3D array.
     matrices = np.stack(matrices, axis=0)
 
     # Save all arrays using the Numpy npz format (simple tar archive of arrays in np storing format)
+    print("Saving file to: ", output_path, " ...", end="", flush=True)
     np.savez(output_path, index=sentence_pairs, analogies=analogy_matrices_list, matrices=matrices,
              lengths=analogies_lengths_list)
+    print(" Done.")
 
 
 
@@ -364,19 +364,23 @@ if __name__ == '__main__':
 
 
     # Load cuboids text file
+    print("Loading cuboids text file...", end="", flush=True)
     input_file = open(input_path)
     lines = input_file.read().splitlines()
     input_file.close()
     assert(len(lines) % 2 == 0)
+    print(" Done.")
+
+    # Load word embedding models
+    print("Loading word embeddings models...", end="", flush=True)
+    first_language_model = KeyedVectors.load(first_model_path)
+    second_language_model = KeyedVectors.load(second_model_path)
+    print(" Done.")
 
     number_of_cuboids = len(lines) // 2
     cuboids_index = list(range(number_of_cuboids))
     # Shuffle at random
     shuffle(cuboids_index)
-
-    train_range = 0, int(0.6 * number_of_cuboids)
-    validation_range = train_range[1], int(0.8 * number_of_cuboids)
-    test_range = validation_range[1], number_of_cuboids
 
     cuboids = [
         (lines[2 * cuboids_index[i]].split("\t"),
@@ -384,17 +388,26 @@ if __name__ == '__main__':
         for i in range(number_of_cuboids)]
 
 
+
+    train_range = 0, int(0.6 * number_of_cuboids)
+    validation_range = train_range[1], int(0.8 * number_of_cuboids)
+    test_range = validation_range[1], number_of_cuboids
+
     train_cuboids = cuboids[train_range[0]:train_range[1]]
     validation_cuboids = cuboids[validation_range[0]:validation_range[1]]
     test_cuboids = cuboids[test_range[0]:test_range[1]]
 
     # Makes all datasets
-    datasetfromcuboids(train_cuboids, first_model_path, second_model_path, bilingual_model_path,
+    print("\nMaking training dataset.")
+    datasetfromcuboids(train_cuboids, first_language_model, second_language_model, bilingual_model_path,
                        output_path + ".train", fill=padding)
-    datasetfromcuboids(validation_cuboids, first_model_path, second_model_path, bilingual_model_path,
+    print("\nMaking validation dataset.")
+    datasetfromcuboids(validation_cuboids, first_language_model, second_language_model, bilingual_model_path,
                        output_path + ".validation", fill=padding)
-    datasetfromcuboids(test_cuboids, first_model_path, second_model_path, bilingual_model_path,
+    print("\nMaking test dataset.")
+    datasetfromcuboids(test_cuboids, first_language_model, second_language_model, bilingual_model_path,
                        output_path + ".test", fill=padding)
+    print("\nDone.")
 
 
 
