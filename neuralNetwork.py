@@ -51,7 +51,7 @@ class SimpleLinear(nn.Module):
     This architecture is a simple affine regression (only one layer with no activation function).
 
     """
-    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=1):
+    def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=3):
         """
         Example:
             To make an architecture that takes in input the matrices 0, 1, 2 and 3 and outputs one matrix of size 10x10:
@@ -84,7 +84,7 @@ class FullyConnectedNetwork(nn.Module):
 
     """
 
-    def __init__(self, matrix_length, layers_size, input_matrices, output_size=1, pixel_mode=False):
+    def __init__(self, matrix_length, layers_size, input_matrices=(0, 1, 2, 3, 4, 5), output_size=3, pixel_mode=False):
         """
         Example:
         To make an architecture with 2 hidden layers with 10 neurons each
@@ -159,13 +159,13 @@ class multiChannelsLinear(nn.Module):
     This Pytorch's Module class is an attempt to allow more efficient calculation of the application of linear
     modules in parallel.
 
-    In the ChanneledNetwork architecture the Gpu has to apply many small transformations and makes the Gpu uses only
+    In the PixelChanneledNetwork architecture the Gpu has to apply many small transformations and makes the Gpu uses only
     a few percentage of its computing capacity. Reducing these small transformations in a few number of big ones
     allow the Cpu to make the least number of Cuda calls.
 
     This version doesn't crash and make the computation more efficient in the ChannelNetworkOptimized architecture.
     In my case Gpu usage increases from 20% to 80%.
-    By the way, the ChanneledNetwork and the ChanneledNetworkOptimized architectures should be totally equivalent and
+    By the way, the PixelChanneledNetwork and the PixelChanneledNetworkOptimized architectures should be totally equivalent and
     it seems not to be the case (speed of convergence are different).
     This makes me think that this class is bugged and do not output what is expected.
 
@@ -213,16 +213,16 @@ class multiChannelsLinear(nn.Module):
         )
 
 
-class ChanneledNetworkOptimized(nn.Module):
+class PixelChanneledNetworkOptimized(nn.Module):
     """
-    This is an attempt to optimize the ChanneledNetwork class.
+    This is an attempt to optimize the PixelChanneledNetwork class.
     The related neural network architecture remains equivalent but use the Gpu more efficiently.
     Many parallel small transformations are computed in a few number of big ones.
     """
 
     def __init__(self, matrix_length, layers_size):
         """
-        See ChanneledNetwork (equivalent architecture).
+        See PixelChanneledNetwork (equivalent architecture).
 
         :param matrix_length: An integer that represents the lengths of the input matrices
             (of dimension matrix_length x matrix_length).
@@ -231,7 +231,7 @@ class ChanneledNetworkOptimized(nn.Module):
         :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
             The length of the tuple represents the number of hidden layers.
         """
-        super(ChanneledNetworkOptimized, self).__init__()
+        super(PixelChanneledNetworkOptimized, self).__init__()
         self.__matrix_length = matrix_length
         self.__matrix_size = self.__matrix_length * self.__matrix_length
         self.__layers_size = layers_size
@@ -271,10 +271,65 @@ class ChanneledNetworkOptimized(nn.Module):
 
 
 
+class MatrixChanneledNetwork(nn.Module):
+    """
+    In this architecture, each of the three output matrices will be computed using four matrices (four to one model).
+    Each matrix is computed independently using the information of the four known matrices that constraint this matrix.
+    Each channel is a sub fully connected network and is equivalent to the FullyConnectedNetwork in its matrix mode.
+    This architecture simply embeds all of these sub networks into a big one that can be trained at once.
+    """
+
+    def __init__(self, matrix_length, layers_size):
+        """
+        :param matrix_length: An integer that represents the lengths of the input matrices
+        (of dimension matrix_length x matrix_length).
+        This architecture takes directly batches of stack of six matrices,
+        i.e. tensors of shape (batch_size, 6, matrix_length, matrix_length).
+        :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
+        The length of the tuple represents the number of hidden layers.
+        """
+        super(MatrixChanneledNetwork, self).__init__()
+        self.__matrix_length = matrix_length
+        self.__matrix_size = self.__matrix_length * self.__matrix_length
+        self.__layers_size = layers_size
+
+        channels_list = list()
+        for out_matrix_i in range(3):
+            layers_list = list()
+            #  Making layers for this matrix
+            layers_list.append(nn.Linear(4 * self.__matrix_size, self.__layers_size[0]))
+            for layer_index in range(len(self.__layers_size)-1):
+                layers_list.append(nn.Linear(self.__layers_size[layer_index], self.__layers_size[layer_index+1]))
+            layers_list.append(nn.Linear(self.__layers_size[-1], self.__matrix_size))
+
+            channels_list.append(nn.ModuleList(layers_list))
+        self.__channels_list = nn.ModuleList(channels_list)
 
 
 
-class ChanneledNetwork(nn.Module):
+
+    def __forward_channel(self, batch, channel_id):
+
+        batch = batch.view(-1, 4 * self.__matrix_size) #  Flatten all matrices (first dim is batch dim)
+        layers = self.__channels_list[channel_id]
+
+        for layer_index in range(len(layers) - 1):
+            batch = F.relu(layers[layer_index](batch))
+        batch = torch.tanh(layers[-1](batch))
+        batch = batch.view(-1, self.__matrix_length, self.__matrix_length)
+        return batch
+
+    def forward(self, batch):
+
+        matrix_6 = self.__forward_channel(batch[:, [0, 1, 2, 3], :, :], 0)
+        matrix_7 = self.__forward_channel(batch[:, [2, 3, 4, 5], :, :], 1)
+        matrix_8 = self.__forward_channel(batch[:, [0, 1, 4, 5], :, :], 2)
+
+        return torch.stack([matrix_6, matrix_7, matrix_8], dim=1)
+
+
+
+class PixelChanneledNetwork(nn.Module):
     """
     In this architecture, each pixel of each output matrix will be computed using its proper channel,
     each pixel is computed independently using the information of the four known matrices that constraint this pixel.
@@ -282,7 +337,7 @@ class ChanneledNetwork(nn.Module):
     This architecture simply embeds all of these sub networks into a big one that can be trained at once.
 
     This architecture suffer from important lack of efficiency due to too many small calls to the Gpu.
-    An attempt to optimize that has been made in the ChanneledNetworkOptimized class.
+    An attempt to optimize that has been made in the PixelChanneledNetworkOptimized class.
 
     """
 
@@ -295,7 +350,7 @@ class ChanneledNetwork(nn.Module):
         :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
         The length of the tuple represents the number of hidden layers.
         """
-        super(ChanneledNetwork, self).__init__()
+        super(PixelChanneledNetwork, self).__init__()
         self.__matrix_length = matrix_length
         self.__matrix_size = self.__matrix_length * self.__matrix_length
         self.__layers_size = layers_size
@@ -356,11 +411,6 @@ class ChanneledNetwork(nn.Module):
         return torch.stack([matrix_6, matrix_7, matrix_8], dim=1)
 
 
-    def online_forward(self, batch):
-        result = None
-        with torch.no_grad():
-            result = self.forward(batch)
-        return result
 
 
 class cuboidDataset(data.Dataset):
@@ -418,8 +468,8 @@ class matricesLoss(torch.nn.modules.loss.MSELoss):
         super(matricesLoss, self).__init__(None, None, 'mean')
         self.__input_matrices = [x-6 for x in input_matrices]
 
-    def forward(self, input, target, print_error_path=None, online=False):
-        if print_error_path is not None or online:
+    def forward(self, input, target, print_error_path=None,):
+        if print_error_path is not None:
 
             input_matrices = input[0].cpu().detach().numpy()
             target_matrices = target[0].cpu().detach().numpy()
@@ -432,12 +482,9 @@ class matricesLoss(torch.nn.modules.loss.MSELoss):
             plt.matshow(target_matrices, cmap="gray_r", fignum=False)
             if print_error_path is not None:
                 plt.savefig(print_error_path, bbox_inches='tight')
-            if online:
-                plt.show()
             plt.clf()
             plt.close()
-        if not online:
-            return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
+        return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
 
 
 class pixelLoss(torch.nn.modules.loss.MSELoss):
@@ -477,9 +524,9 @@ def smoothing(l, level=3):
     return result_list
 
 
-def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=None, verbose=False, batch_size=64,
-          initial_lr=0.001, decay=0.5, num_workers=0, average_frequency=50, print_error_path=None,
-          print_focus_path=None, print_epoch_loss_path=None, patience=10):
+def train(net, training_set, test_set, truth_index=(6, 7, 8), pixel_mode=False, save_path=None, verbose=False,
+          batch_size=64, initial_lr=0.001, decay=0.9, num_workers=0, average_frequency=30, print_error_path=None,
+          print_epoch_loss_path=None, patience=10):
 
     """
     Train a given neural network.
@@ -503,7 +550,6 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
         These last losses are used to draw figures, to feed the learning rate scheduler,
         and decide if a new epoch is needed.
     :param print_error_path: Output path where to store the last output/truth error comparison.
-    :param print_focus_path: Output path where to store the last focus analysis.
     :param print_epoch_loss_path: Output path where to store the figure of losses per epochs.
     :param patience: Patience for the learning rate scheduler.
         Each average_frequency, an average on validation loss will be given to the scheduler.
@@ -556,23 +602,8 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
             time_to_average = train_index % average_frequency == average_frequency - 1
             batch, truth = train_batch, train_truth
 
-            if time_to_average and print_focus_path is not None:
-                batch = torch.autograd.Variable(batch, requires_grad=True)
-                optimizer.zero_grad()
-                outputs = net(batch)
-                # Attention lookup
-                outputs[0].backward(retain_graph=True)
-                params = [x.grad.cpu().detach().numpy() for x in list(net.parameters())[::2][::-1]]
-                product_param = np.linalg.multi_dot(params).reshape(-1, matrix_length)
-                input_lookup = batch.grad.cpu().detach().numpy()[0][list(net.get_input_index())].reshape(-1, matrix_length)
-                drawMatrix(input_lookup * product_param)
-                plt.savefig(print_focus_path)
-                plt.clf()
-                plt.close()
-                optimizer.zero_grad()
-            else:
-                optimizer.zero_grad()
-                outputs = net(batch)
+            optimizer.zero_grad()
+            outputs = net(batch)
 
             training_loss = criterion(outputs, truth)
             training_loss.backward()
@@ -653,15 +684,14 @@ def numberofparameters(net):
 
 
 
+"""
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 training_set = cuboidDataset("en-fr.matrices.train.npz", device=device)
 test_set = cuboidDataset("en-fr.matrices.test.npz", device=device)
 matrix_length = training_set.getmatrixlength()
 
-#net = channelDense(matrix_length, layers_size=[100, 100])
-#final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.5, patience=10, print_error_path="error.pdf")
-
-net = ChanneledNetworkOptimized(matrix_length, layers_size=[100, 100])
+net = PixelChanneledNetworkOptimized(matrix_length, layers_size=[100, 100])
 print("Number of parameters", numberofparameters(net))
 final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.9, patience=10, print_error_path="error.pdf")
 
+"""

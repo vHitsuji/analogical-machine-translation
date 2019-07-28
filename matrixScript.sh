@@ -1,4 +1,4 @@
-python3 sentences2matrices.py \
+python3 makedataset.py \
 --padding \
 --input ../corpora/en-fr.cuboid.nlg \
 --output en-fr.matrices \
