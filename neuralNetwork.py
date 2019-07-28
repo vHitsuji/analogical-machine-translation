@@ -1,33 +1,71 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# __doc__ string
+"""
+The purpose of this little script is to compute the needed datasets for the training, the validation and the test
+of the neural networks.
+"""
+
+__author__ = "Taillandier Valentin"
+__copyright__ = "Copyright (C) 2019, Taillandier Valentin"
+__license__ = "GPL"
+__version__ = "1.0"
+
+
+import math
+from itertools import cycle
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils import data
-import numpy as np
-import matplotlib.pyplot as plt
-from progressbar import progressbar
-from math import sqrt
-from itertools import cycle
+from functools import reduce
 
-def printMatrix(matrix, s1_words=None, s2_words=None):
+
+def drawMatrix(matrix, x_axis=None, y_axis=None):
     """
-    Print an alignment matrix with given string as axis scale.
-    Do not forget to plt.show() when you want to show the matrix.
-    :param matrix: Matrix to show.
-    :param s1_words: x_axis sentence.
-    :param s2_words: y_axis sentence.
+    Draw an alignment matrix with given string as axis scale.
+    The drawn matrix is stored in the default pyplot container.
+    Do not forget to plt.show() if you want to show the matrix
+    or to do plt.savefig("mymatrix.pdf") if you want to save the figure.
+
+    This was made for a debug purpose and to make illustration for presentations.
+
+    :param matrix: Numpy 2D-Array, Alignment matrix to show.
+    :param x_axis: List of words for the x-axis label.
+    :param y_axis: List of words for the y-axis label.
     :return: None
     """
     plt.matshow(matrix, cmap="gray_r")
-    if s1_words is not None and s1_words is not None:
-        plt.xticks(range(len(s2_words)), s2_words)
-        plt.yticks(range(len(s1_words)), s1_words)
+    if x_axis is not None and y_axis is not None:
+        plt.xticks(range(len(y_axis)), y_axis)
+        plt.yticks(range(len(x_axis)), x_axis)
 
 
-class simpleLinear(nn.Module):
-    """ Always output one matrix"""
+class SimpleLinear(nn.Module):
+    """
+    This architecture is a simple affine regression (only one layer with no activation function).
+
+    """
     def __init__(self, matrix_length, input_matrices=(0, 1, 2, 3, 4, 5), output_size=1):
-        super(simpleLinear, self).__init__()
+        """
+        Example:
+            To make an architecture that takes in input the matrices 0, 1, 2 and 3 and outputs one matrix of size 10x10:
+                SimpleLinear(10, input_matrices=(0,1,2,3), output_size=1)
+            To make an architecture that takes in input the matrices 0, 1, 2, 3, 4, 5
+            and outputs three matrices of size15x15 :
+                SimpleLinear(15, input_matrices=(0,1,2,3,4,5), output_size=3)
+
+        :param matrix_length: An integer that represents the lengths of the input matrices
+        (of dimension matrix_length x matrix_length).
+        :param input_matrices: A tuple of integers which represents the id of the matrices to use when input is given?
+        :param output_size: An integer, the number of matrices to output.
+        """
+        super(SimpleLinear, self).__init__()
         self.__input_matrices = input_matrices
         self.__matrix_length = matrix_length
         self.__matrix_size = self.__matrix_length * self.__matrix_length
@@ -41,10 +79,38 @@ class simpleLinear(nn.Module):
         return batch
 
 
-class simpleDense(nn.Module):
+class FullyConnectedNetwork(nn.Module):
+    """
+
+    """
 
     def __init__(self, matrix_length, layers_size, input_matrices, output_size=1, pixel_mode=False):
-        super(simpleDense, self).__init__()
+        """
+        Example:
+        To make an architecture with 2 hidden layers with 10 neurons each
+        that takes in input the matrices 0, 1, 2 and 3 and outputs one matrix of size 10x10:
+            FullyConnectedNetwork(10, [10, 10], input_matrices=(0,1,2,3), output_size=1)
+        To make an architecture with 3 hidden layers with 10, 15 and 20 neurons
+        that takes in input the matrices 0, 1, 2, 3, 4, 5
+        and outputs three matrices of size15x15:
+            FullyConnectedNetwork(15, [10,15,20], input_matrices=(0,1,2,3,4,5), output_size=3)
+        To make an architecture with 3 hidden layers with 10, 15 and 20 neurons
+        that takes in input the matrices 0, 1, 2, 3 of size 15x15 and
+        and outputs one pixel:
+            FullyConnectedNetwork(15, [10,15,20], input_matrices=(0,1,2,3), pixel_mode=True)
+
+
+
+        :param matrix_length: An integer that represents the lengths of the input matrices
+            (of dimension matrix_length x matrix_length).
+        :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
+            The length of the tuple represents the number of hidden layers.
+        :param input_matrices: A tuple of integers which represents the id of the matrices to use when input is given?
+        :param output_size: An integer, the number of matrices to output. (Not read if pixel_mode=True)
+        :param pixel_mode: If true, outputs only one pixel.
+
+        """
+        super(FullyConnectedNetwork, self).__init__()
         self.__input_matrices = input_matrices
         self.__input_size = len(input_matrices)  # Number of matrices in the input
         self.__output_size = output_size  # Number of matrices in the output
@@ -84,10 +150,152 @@ class simpleDense(nn.Module):
         return batch
 
 
-class channelDense(nn.Module):
+
+
+class multiChannelsLinear(nn.Module):
+    """
+    Does not work yet.
+
+    This Pytorch's Module class is an attempt to allow more efficient calculation of the application of linear
+    modules in parallel.
+
+    In the ChanneledNetwork architecture the Gpu has to apply many small transformations and makes the Gpu uses only
+    a few percentage of its computing capacity. Reducing these small transformations in a few number of big ones
+    allow the Cpu to make the least number of Cuda calls.
+
+    This version doesn't crash and make the computation more efficient in the ChannelNetworkOptimized architecture.
+    In my case Gpu usage increases from 20% to 80%.
+    By the way, the ChanneledNetwork and the ChanneledNetworkOptimized architectures should be totally equivalent and
+    it seems not to be the case (speed of convergence are different).
+    This makes me think that this class is bugged and do not output what is expected.
+
+    """
+
+    __constants__ = ['bias']
+
+    def __init__(self, channels, in_features, out_features, bias=True):
+        """
+        :param channels: An integer, the number of channels.
+        :param in_features: An integer, the number of input features for each channels.
+        :param out_features: An integer, the number of output features for each channels.
+        :param bias: A boolean, if True, bias will be added (Linear transformations become affine).
+        """
+        super(multiChannelsLinear, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.channels = channels
+        self.weight = nn.Parameter(torch.Tensor(channels, out_features, in_features))
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(channels, out_features))
+        else:
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, input):
+        input = input.transpose(0, 2).transpose(0, 1)
+        output = self.weight.matmul(input)
+        output = output.transpose(0, 1).transpose(0, 2)
+        if self.bias is not None:
+            output += self.bias
+        ret = output
+        return ret
+
+    def extra_repr(self):
+        return 'channels={}, in_features={}, out_features={}, bias={}'.format(
+            self.channels, self.in_features, self.out_features, self.bias is not None
+        )
+
+
+class ChanneledNetworkOptimized(nn.Module):
+    """
+    This is an attempt to optimize the ChanneledNetwork class.
+    The related neural network architecture remains equivalent but use the Gpu more efficiently.
+    Many parallel small transformations are computed in a few number of big ones.
+    """
 
     def __init__(self, matrix_length, layers_size):
-        super(channelDense, self).__init__()
+        """
+        See ChanneledNetwork (equivalent architecture).
+
+        :param matrix_length: An integer that represents the lengths of the input matrices
+            (of dimension matrix_length x matrix_length).
+            This architecture takes directly batches of stack of six matrices,
+            i.e. tensors of shape (batch_size, 6, matrix_length, matrix_length).
+        :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
+            The length of the tuple represents the number of hidden layers.
+        """
+        super(ChanneledNetworkOptimized, self).__init__()
+        self.__matrix_length = matrix_length
+        self.__matrix_size = self.__matrix_length * self.__matrix_length
+        self.__layers_size = layers_size
+
+        self.__first_layer0 = nn.Linear(4 * self.__matrix_size, self.__layers_size[0]*self.__matrix_size)
+        self.__first_layer1 = nn.Linear(4 * self.__matrix_size, self.__layers_size[0]*self.__matrix_size)
+        self.__first_layer2 = nn.Linear(4 * self.__matrix_size, self.__layers_size[0]*self.__matrix_size)
+
+        layers_list = list()
+        for layer_index in range(len(self.__layers_size)-1):
+            layers_list.append(multiChannelsLinear(3 * self.__matrix_size,
+                                                   self.__layers_size[layer_index], self.__layers_size[layer_index+1]))
+
+        layers_list.append(multiChannelsLinear(3 * self.__matrix_size, self.__layers_size[-1], 1))
+        self.__layers_list = nn.ModuleList(layers_list)
+
+
+
+
+
+    def forward(self, batch):
+
+        first_output0 = self.__first_layer0(batch[:, [0, 1, 2, 3], :, :].reshape(-1, 4*self.__matrix_size))\
+            .reshape(-1, self.__matrix_size, self.__layers_size[0])
+        first_output1 = self.__first_layer1(batch[:, [2, 3, 4, 5], :, :].reshape(-1, 4*self.__matrix_size))\
+            .reshape(-1, self.__matrix_size, self.__layers_size[0])
+        first_output2 = self.__first_layer2(batch[:, [0, 1, 4, 5], :, :].reshape(-1, 4*self.__matrix_size))\
+            .reshape(-1, self.__matrix_size, self.__layers_size[0])
+        output = F.relu(torch.cat([first_output0, first_output1, first_output2], dim=1))
+
+        for layer_index in range(len(self.__layers_list) - 1):
+            output = F.relu(self.__layers_list[layer_index](output))
+        output = torch.tanh(self.__layers_list[-1](output))
+
+        return output.reshape(-1, 3, self.__matrix_length, self.__matrix_length)
+
+
+
+
+
+
+
+class ChanneledNetwork(nn.Module):
+    """
+    In this architecture, each pixel of each output matrix will be computed using its proper channel,
+    each pixel is computed independently using the information of the four known matrices that constraint this pixel.
+    Each channel is a sub fully connected network and is equivalent to the FullyConnectedNetwork in its pixel mode.
+    This architecture simply embeds all of these sub networks into a big one that can be trained at once.
+
+    This architecture suffer from important lack of efficiency due to too many small calls to the Gpu.
+    An attempt to optimize that has been made in the ChanneledNetworkOptimized class.
+
+    """
+
+    def __init__(self, matrix_length, layers_size):
+        """
+        :param matrix_length: An integer that represents the lengths of the input matrices
+        (of dimension matrix_length x matrix_length).
+        This architecture takes directly batches of stack of six matrices,
+        i.e. tensors of shape (batch_size, 6, matrix_length, matrix_length).
+        :param layers_size: A tuple of integer that represents the number of neurons in each hidden layer.
+        The length of the tuple represents the number of hidden layers.
+        """
+        super(ChanneledNetwork, self).__init__()
         self.__matrix_length = matrix_length
         self.__matrix_size = self.__matrix_length * self.__matrix_length
         self.__layers_size = layers_size
@@ -148,11 +356,25 @@ class channelDense(nn.Module):
         return torch.stack([matrix_6, matrix_7, matrix_8], dim=1)
 
 
+    def online_forward(self, batch):
+        result = None
+        with torch.no_grad():
+            result = self.forward(batch)
+        return result
 
 
 class cuboidDataset(data.Dataset):
-    def __init__(self, matrices_file_path, device=torch.device("cpu")):
-        dataset = np.load(matrices_file_path)
+    """
+    Loads a cuboids dataset that can be used in a Pytorch's Dataloader.
+    """
+
+    def __init__(self, dataset_file_path, device=torch.device("cpu")):
+        """
+        :param dataset_file_path: Path to the dataset.
+        :param device: Pytorch's device object where to store the dataset.
+        """
+
+        dataset = np.load(dataset_file_path)
 
         self.__analogies_index = dataset["analogies"]
         self.__sentence_couples_index = dataset["index"]
@@ -185,13 +407,19 @@ class cuboidDataset(data.Dataset):
 
 
 class matricesLoss(torch.nn.modules.loss.MSELoss):
+    """
+    Loss criterion builder for matrices using mean square errors.
+    """
 
     def __init__(self, input_matrices):
+        """
+        :param input_matrices: Index of the matrices to compare.
+        """
         super(matricesLoss, self).__init__(None, None, 'mean')
         self.__input_matrices = [x-6 for x in input_matrices]
 
-    def forward(self, input, target, print_error_path=None):
-        if print_error_path is not None:
+    def forward(self, input, target, print_error_path=None, online=False):
+        if print_error_path is not None or online:
 
             input_matrices = input[0].cpu().detach().numpy()
             target_matrices = target[0].cpu().detach().numpy()
@@ -202,15 +430,26 @@ class matricesLoss(torch.nn.modules.loss.MSELoss):
             plt.matshow(input_matrices, cmap="gray_r", fignum=False)
             plt.subplot(1, 2, 2)
             plt.matshow(target_matrices, cmap="gray_r", fignum=False)
-            plt.savefig(print_error_path, bbox_inches='tight')
+            if print_error_path is not None:
+                plt.savefig(print_error_path, bbox_inches='tight')
+            if online:
+                plt.show()
             plt.clf()
             plt.close()
-        return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
+        if not online:
+            return F.mse_loss(input, target[:, self.__input_matrices, :, :], reduction=self.reduction)
 
 
 class pixelLoss(torch.nn.modules.loss.MSELoss):
+    """
+    Loss criterion builder for pixel using mean square errors.
+    """
 
     def __init__(self, input_matrix, input_pixel):
+        """
+        :param input_matrix: The id of the matrix containing the pixel.
+        :param input_pixel: A pair of integers giving the position of the pixel to compare.
+        """
         super(pixelLoss, self).__init__(None, None, 'mean')
         self.__input_matrix = input_matrix - 6
         self.__pixel_x = input_pixel[0]
@@ -219,7 +458,7 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
     def forward(self, input, target, print_error_path=None):
         if print_error_path is not None:
             compare = torch.stack((input.view(-1), target[:, self.__input_matrix, self.__pixel_x, self.__pixel_y]), dim=0)
-            printMatrix(compare.cpu().detach().numpy())
+            drawMatrix(compare.cpu().detach().numpy())
             plt.savefig(print_error_path, bbox_inches='tight')
             plt.clf()
             plt.close()
@@ -238,14 +477,46 @@ def smoothing(l, level=3):
     return result_list
 
 
-def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=None, verbose=False,
-          initial_lr=0.001, decay=0.5, num_workers=0, print_error_path=None,
+def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=None, verbose=False, batch_size=64,
+          initial_lr=0.001, decay=0.5, num_workers=0, average_frequency=50, print_error_path=None,
           print_focus_path=None, print_epoch_loss_path=None, patience=10):
+
+    """
+    Train a given neural network.
+
+    :param net: Neural network to train.
+    :param training_set: Training dataset.
+    :param test_set: Validation dataset.
+    :param truth_index:
+        If matrix mode (i.e. pixel_mode=False): Index of the matrices in the ground truth to compare with the outputs.
+        If pixel mode: Pair of index of the matrix containing the pixel in the ground truth and location of the pixel.
+            Example: (1, (4, 5)) to compare with the pixel at x=4, y=5 in the matrix with id 1.
+    :param pixel_mode: A boolean, if true activates the pixel mode.
+    :param save_path: The path where to save the parameters of the neural network after training.
+        Does not store anything by default.
+    :param verbose: If true, information about running loss and learning rates will be printed in stdout.
+    :param batch_size: Integer, the size of batchs.
+    :param initial_lr: The initial learning rate.
+    :param decay: When the initial rate has to be decreased, apply new_learning_rate = decay * old_learning_rate
+    :param num_workers: Number of workers for loading the batches (If you get errors, put at 0).
+    :param average_frequency: The frequency of batchs to average the last losses.
+        These last losses are used to draw figures, to feed the learning rate scheduler,
+        and decide if a new epoch is needed.
+    :param print_error_path: Output path where to store the last output/truth error comparison.
+    :param print_focus_path: Output path where to store the last focus analysis.
+    :param print_epoch_loss_path: Output path where to store the figure of losses per epochs.
+    :param patience: Patience for the learning rate scheduler.
+        Each average_frequency, an average on validation loss will be given to the scheduler.
+        If these average losses have not decreased after patience number calls,
+        the scheduler decreases the learning rate.
+    :return: The final training loss that has been obtained after converging.
+    """
+
     if verbose:
         print("Is cuda available?", torch.cuda.is_available() )
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
-    params = {'batch_size': 64,
+    params = {'batch_size': batch_size,
               'shuffle': True,
               'num_workers': num_workers}
 
@@ -264,28 +535,28 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
     else:
         criterion = matricesLoss(truth_index)
 
-    print_frequency = 1
     average_test_loss = float("inf")
     continue_training = True
     epoch = 0
     optimizer = optim.Adam(net.parameters(), lr=initial_lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=decay, patience=patience, verbose=verbose)
+
+    epoch_train_loss = list()
+    epoch_test_loss = list()
     while continue_training:
         
         
     
-
+        epoch_train_loss.append([])
+        epoch_test_loss.append([])
         running_test_loss = 0.0
         running_training_loss = 0.0
         # Training
-        epoch_train_loss = list()
-        epoch_test_loss = list()
         for train_index, (train_batch, train_truth) in enumerate(training_generator):
-            print_bool = train_index % print_frequency == print_frequency - 1
-            #batch, truth = train_batch.to(device), train_truth.to(device)
+            time_to_average = train_index % average_frequency == average_frequency - 1
             batch, truth = train_batch, train_truth
 
-            if print_bool and print_focus_path is not None:
+            if time_to_average and print_focus_path is not None:
                 batch = torch.autograd.Variable(batch, requires_grad=True)
                 optimizer.zero_grad()
                 outputs = net(batch)
@@ -294,7 +565,7 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
                 params = [x.grad.cpu().detach().numpy() for x in list(net.parameters())[::2][::-1]]
                 product_param = np.linalg.multi_dot(params).reshape(-1, matrix_length)
                 input_lookup = batch.grad.cpu().detach().numpy()[0][list(net.get_input_index())].reshape(-1, matrix_length)
-                printMatrix(input_lookup*product_param)
+                drawMatrix(input_lookup * product_param)
                 plt.savefig(print_focus_path)
                 plt.clf()
                 plt.close()
@@ -304,29 +575,30 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
                 outputs = net(batch)
 
             training_loss = criterion(outputs, truth)
-            epoch_train_loss.append(training_loss.item())
             training_loss.backward()
             optimizer.step()
 
 
             with torch.no_grad():
                 batch, truth = next(test_generator)
-                #batch, truth = batch.to(device), truth.to(device)
 
                 outputs = net(batch)
-                if print_bool:
+                if time_to_average:
                     # Loss with error printing
                     test_loss = criterion(outputs, truth, print_error_path=print_error_path)
                 else:
                     test_loss = criterion(outputs, truth)
-                epoch_test_loss.append(test_loss.item())
 
 
             running_test_loss += test_loss.item()
             running_training_loss += training_loss.item()
-            if print_bool:    # print every print_frequency mini-batches
-                avg_test_loss = running_test_loss/print_frequency
-                avg_training_loss = running_training_loss/print_frequency
+            if time_to_average:    # print every average_frequency mini-batches
+                avg_test_loss = running_test_loss/average_frequency
+                avg_training_loss = running_training_loss/average_frequency
+
+                epoch_train_loss[-1].append(avg_training_loss)
+                epoch_test_loss[-1].append(avg_test_loss)
+
                 scheduler.step(avg_test_loss)
                 if verbose:
                     print('[%d, %5d] training loss: %.5f test loss: %.5f' %
@@ -337,15 +609,24 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
 
 
         if print_epoch_loss_path is not None:
-            plt.plot(smoothing(epoch_train_loss, level=1000), color="red", label="train")
-            plt.plot(smoothing(epoch_test_loss, level=1000), color="green", label="test")
+            train_loss_list = list()
+            test_loss_list = list()
+            epoch_length = [0]
+            for past_epoch in range(len(epoch_train_loss)):
+                train_loss_list.extend(epoch_train_loss[past_epoch])
+                test_loss_list.extend(epoch_test_loss[past_epoch])
+                epoch_length.append(epoch_length[-1] + len(epoch_train_loss[past_epoch]))
+
+            plt.plot(train_loss_list, color="red", label="train")
+            plt.plot(test_loss_list, color="green", label="test")
+            plt.xticks(epoch_length, list(range(len(epoch_length) + 1)))
             plt.savefig('epoch' + str(epoch) + "." + print_epoch_loss_path, bbox_inches='tight')
             plt.clf()
             plt.close()
 
 
 
-        new_average_test_loss = sum(epoch_test_loss[-1000:])/1000
+        new_average_test_loss = epoch_test_loss[-1][-1]
         if new_average_test_loss < average_test_loss*0.9:
             average_test_loss = new_average_test_loss
             if verbose:
@@ -359,51 +640,28 @@ def train(net, training_set, test_set, truth_index, pixel_mode=False, save_path=
 
 
 
+def numberofparameters(net):
+    """
+    Returns the number of trainable parameters of a given neural network.
+    :param net: The neural network object.
+    :return: An integer.
+    """
+    model_parameters = filter(lambda p: p.requires_grad, net.parameters())
+    return sum([np.prod(p.size()) for p in model_parameters])
 
 
-def layers_size_optimize():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    training_set = cuboidDataset("en-fr.matrices.train.npz", device=device)
-    test_set = cuboidDataset("en-fr.matrices.test.npz", device=device)
-    matrix_length = training_set.getmatrixlength()
 
-    one_layer_loss = np.ndarray((5, 1))
-    for i in progressbar(range(0, 5)):
-        net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True, layers_size=[(i + 1) * 10])
-        final_loss = train(net, training_set, test_set, truth_index=(7, 6, 7), pixel_mode=True, verbose=True)
-        one_layer_loss[i, 0] = final_loss
-        plt.matshow(one_layer_loss)
-        plt.colorbar()
-        plt.savefig("one_layer_loss.pdf", bbox_inches='tight')
-        plt.savefig("one_layer_loss.png", bbox_inches='tight')
-        plt.clf()
-        plt.close()
-
-    index_list = list()
-    for i in range(5):
-        for j in range(5):
-            index_list.append(((i + 1) * (j + 1), i, j))
-    index_list = sorted(index_list)
-
-    two_layer_loss = np.ndarray((5, 5))
-    for _, i, j in progressbar(index_list):
-        net = simpleDense(matrix_length, input_matrices=(2, 3, 4, 5), pixel_mode=True,
-                          layers_size=[(i + 1) * 10, (j + 1) * 10])
-        final_loss = train(net, training_set, test_set, truth_index=(7, 6, 7), pixel_mode=True)
-        one_layer_loss[i, j] = final_loss
-        plt.matshow(two_layer_loss)
-        plt.colorbar()
-        plt.savefig("two_layer_loss.pdf", bbox_inches='tight')
-        plt.savefig("two_layer_loss.png", bbox_inches='tight')
-        plt.clf()
-        plt.close()
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 training_set = cuboidDataset("en-fr.matrices.train.npz", device=device)
 test_set = cuboidDataset("en-fr.matrices.test.npz", device=device)
 matrix_length = training_set.getmatrixlength()
-net = channelDense(matrix_length, layers_size=[100, 100])
-#final_loss = train(net, training_set, test_set, truth_index=(8, 6, 7), pixel_mode=True, verbose=True, initial_lr=0.001, print_error_path="error.pdf", print_focus_path="focus.pdf")
-final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.5, patience=10, print_error_path="error.pdf")
+
+#net = channelDense(matrix_length, layers_size=[100, 100])
+#final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.5, patience=10, print_error_path="error.pdf")
+
+net = ChanneledNetworkOptimized(matrix_length, layers_size=[100, 100])
+print("Number of parameters", numberofparameters(net))
+final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.9, patience=10, print_error_path="error.pdf")
 
