@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# __doc__ string
 """
 The purpose of this little script is to compute the needed datasets for the training, the validation and the test
 of the neural networks.
@@ -382,13 +383,13 @@ if __name__ == '__main__':
     # Shuffle at random
     shuffle(cuboids_index)
 
+    # Parses cuboids from raw text
     cuboids = [
         (lines[2 * cuboids_index[i]].split("\t"),
          lines[2 * cuboids_index[i] + 1].split("\t"))
         for i in range(number_of_cuboids)]
 
-
-
+    # Divide in 60%, 20%, 20%
     train_range = 0, int(0.6 * number_of_cuboids)
     validation_range = train_range[1], int(0.8 * number_of_cuboids)
     test_range = validation_range[1], number_of_cuboids

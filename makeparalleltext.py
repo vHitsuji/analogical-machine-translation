@@ -1,32 +1,48 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
+# __doc__ string
+"""
+The purpose of this little script is to extract a parallel corpus from a cuboids corpus.
+"""
+
+__author__ = "Taillandier Valentin"
+__copyright__ = "Copyright (C) 2019, Taillandier Valentin"
+__license__ = "GPL"
+__version__ = "1.0"
 
 
 import argparse
-from progressbar import progressbar
-
+try:
+    # If progressbar module is available, it will be used to show some progressbars.
+    # To install it -> pip3 install progressbar2 --user
+    from progressbar import progressbar
+except ImportError:
+    def progressbar(x):
+        return x
 
 
 
 if __name__ == '__main__':
 
-    #Argz parsing
-    parser = argparse.ArgumentParser(description='Extract bitexts from cuboid analogies file.')
-    parser.add_argument('--input', dest='input_path', action='store', help='Cuboid analogies textfile to proceed.')
-    parser.add_argument('--output_l1_l2', dest='output12_path', action='store', help='Output name for the language1 to language2 bitext.')
-    parser.add_argument('--output_l2_l1', dest='output21_path', action='store', help='Output name for the language2 to language1 bitext.')
+    # Parsing arguments
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', dest='input_path', action='store', help='Cuboids text file path.')
+    parser.add_argument('--output_l1_l2', dest='first_to_second_path', action='store',
+                        help='Output path for the first language to second language parallel corpus.')
+    parser.add_argument('--output_l2_l1', dest='second_to_first_path', action='store',
+                        help='Output path for the second language to first language parallel corpus.')
     args = parser.parse_args()
     input_path = args.input_path
-    output12_path = args.output12_path
-    output21_path = args.output21_path
+    output12_path = args.first_to_second_path
+    output21_path = args.second_to_first_path
 
-
-    #Load sentences
+    # Load sentences
     input_file = open(input_path)
     lines = input_file.read().splitlines()
     input_file.close()
 
-    assert(len(lines) % 2 == 0)  # One analogy takes 2 lines. So there is an even number of lines.
+    assert(len(lines) % 2 == 0)
 
     bilingual_couples = set()
     bitext12 = []
