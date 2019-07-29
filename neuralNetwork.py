@@ -23,8 +23,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils import data
-from functools import reduce
-
+try:
+    # If progressbar module is available, it will be used to show some progressbars.
+    # To install it -> pip3 install progressbar2 --user
+    from progressbar import progressbar
+except ImportError:
+    def progressbar(x):
+        return x
 
 def drawMatrix(matrix, x_axis=None, y_axis=None):
     """
@@ -81,7 +86,8 @@ class SimpleLinear(nn.Module):
 
 class FullyConnectedNetwork(nn.Module):
     """
-
+    This architecture is a simple fully connect neural network.
+    The activation between hidden layers is ReLu. The final output activation is tanh.
     """
 
     def __init__(self, matrix_length, layers_size, input_matrices=(0, 1, 2, 3, 4, 5), output_size=3, pixel_mode=False):
@@ -159,14 +165,14 @@ class multiChannelsLinear(nn.Module):
     This Pytorch's Module class is an attempt to allow more efficient calculation of the application of linear
     modules in parallel.
 
-    In the PixelChanneledNetwork architecture the Gpu has to apply many small transformations and makes the Gpu uses only
-    a few percentage of its computing capacity. Reducing these small transformations in a few number of big ones
+    In the PixelChanneledNetwork architecture the Gpu has to apply many small transformations and makes the Gpu uses
+    only a few percentage of its computing capacity. Reducing these small transformations in a few number of big ones
     allow the Cpu to make the least number of Cuda calls.
 
     This version doesn't crash and make the computation more efficient in the ChannelNetworkOptimized architecture.
     In my case Gpu usage increases from 20% to 80%.
-    By the way, the PixelChanneledNetwork and the PixelChanneledNetworkOptimized architectures should be totally equivalent and
-    it seems not to be the case (speed of convergence are different).
+    By the way, the PixelChanneledNetwork and the PixelChanneledNetworkOptimized architectures should be totally
+    equivalent and it seems not to be the case (speed of convergence are different).
     This makes me think that this class is bugged and do not output what is expected.
 
     """
@@ -461,12 +467,14 @@ class matricesLoss(torch.nn.modules.loss.MSELoss):
     Loss criterion builder for matrices using mean square errors.
     """
 
-    def __init__(self, input_matrices):
+    def __init__(self, input_matrices, test_mode=False):
         """
         :param input_matrices: Index of the matrices to compare.
         """
         super(matricesLoss, self).__init__(None, None, 'mean')
         self.__input_matrices = [x-6 for x in input_matrices]
+        if test_mode:
+            self.reduction = 'none'
 
     def forward(self, input, target, print_error_path=None,):
         if print_error_path is not None:
@@ -492,7 +500,7 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
     Loss criterion builder for pixel using mean square errors.
     """
 
-    def __init__(self, input_matrix, input_pixel):
+    def __init__(self, input_matrix, input_pixel, test_mode=False):
         """
         :param input_matrix: The id of the matrix containing the pixel.
         :param input_pixel: A pair of integers giving the position of the pixel to compare.
@@ -501,6 +509,8 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
         self.__input_matrix = input_matrix - 6
         self.__pixel_x = input_pixel[0]
         self.__pixel_y = input_pixel[1]
+        if test_mode:
+            self.reduction = 'none'
 
     def forward(self, input, target, print_error_path=None):
         if print_error_path is not None:
@@ -524,7 +534,7 @@ def smoothing(l, level=3):
     return result_list
 
 
-def train(net, training_set, test_set, truth_index=(6, 7, 8), pixel_mode=False, save_path=None, verbose=False,
+def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=False, save_path=None, verbose=False,
           batch_size=64, initial_lr=0.001, decay=0.9, num_workers=0, average_frequency=30, print_error_path=None,
           print_epoch_loss_path=None, patience=10):
 
@@ -533,7 +543,7 @@ def train(net, training_set, test_set, truth_index=(6, 7, 8), pixel_mode=False, 
 
     :param net: Neural network to train.
     :param training_set: Training dataset.
-    :param test_set: Validation dataset.
+    :param validation_set: Validation dataset.
     :param truth_index:
         If matrix mode (i.e. pixel_mode=False): Index of the matrices in the ground truth to compare with the outputs.
         If pixel mode: Pair of index of the matrix containing the pixel in the ground truth and location of the pixel.
@@ -569,7 +579,7 @@ def train(net, training_set, test_set, truth_index=(6, 7, 8), pixel_mode=False, 
     net = net.to(device)
 
     training_generator = data.DataLoader(training_set, **params)
-    test_generator = cycle(data.DataLoader(test_set, **params))
+    test_generator = cycle(data.DataLoader(validation_set, **params))
 
     if verbose:
         print("Generators loaded")
@@ -669,6 +679,53 @@ def train(net, training_set, test_set, truth_index=(6, 7, 8), pixel_mode=False, 
             continue_training = False
     return float(average_test_loss)
 
+
+def test(net, test_set, truth_index=(6, 7, 8), pixel_mode=False, verbose=False):
+    """
+    Test a given neural network.
+
+    :param net: Neural network to train.
+    :param test_set: Test dataset.
+    :param truth_index:
+        If matrix mode (i.e. pixel_mode=False): Index of the matrices in the ground truth to compare with the outputs.
+        If pixel mode: Pair of index of the matrix containing the pixel in the ground truth and location of the pixel.
+            Example: (1, (4, 5)) to compare with the pixel at x=4, y=5 in the matrix with id 1.
+    :param pixel_mode: A boolean, if true activates the pixel mode.
+    :param verbose: If true, information about running loss and learning rates will be printed in stdout.
+    :param num_workers: Number of workers for loading the batches (If you get errors, put at 0).
+    :return: The final training loss that has been obtained after converging.
+    """
+
+    if verbose:
+        print("Is cuda available?", torch.cuda.is_available())
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    params = {'batch_size': 2048,
+              'num_workers': 0}
+
+    net = net.to(device)
+    test_generator = cycle(data.DataLoader(test_set, **params))
+
+    if verbose:
+        print("Generators loaded")
+        print("Net architecture:")
+        print(net)
+
+    if pixel_mode:
+        criterion = pixelLoss(truth_index[0], (truth_index[1], truth_index[2]))
+    else:
+        criterion = matricesLoss(truth_index)
+
+
+        for train_index, (train_batch, train_truth) in progressbar(enumerate(training_generator)):
+
+            batch, truth = train_batch, train_truth
+            with torch.no_grad():
+                outputs = net(batch)
+                test_loss = criterion(outputs, truth).item()
+
+
+    return float(average_test_loss)
 
 
 def numberofparameters(net):
