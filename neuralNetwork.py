@@ -23,8 +23,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils import data
+import seaborn as sns
+from nltk.translate.bleu_score import sentence_bleu
 try:
-    # If progressbar module is available, it will be used to show some progressbars.
+    # If progressbar module is available, it will be used to show some progress bars.
     # To install it -> pip3 install progressbar2 --user
     from progressbar import progressbar
 except ImportError:
@@ -424,7 +426,7 @@ class cuboidDataset(data.Dataset):
     Loads a cuboids dataset that can be used in a Pytorch's Dataloader.
     """
 
-    def __init__(self, dataset_file_path, device=torch.device("cpu")):
+    def __init__(self, dataset_file_path, device=torch.device("cpu"), test_mode=False):
         """
         :param dataset_file_path: Path to the dataset.
         :param device: Pytorch's device object where to store the dataset.
@@ -437,11 +439,10 @@ class cuboidDataset(data.Dataset):
         self.__matrices = dataset["matrices"]
         self.__matrix_length = self.__matrices.shape[1]
         self.__matrix_size = self.__matrices.shape[1]*self.__matrices.shape[2]
-        assert(self.__matrix_size == 10*10)
 
         self.__length = len(self.__analogies_index)
 
-
+        self.__test_mode = test_mode
         self.__matrices = torch.from_numpy(self.__matrices).to(device)
         self.__matrices = self.__matrices.float()
 
@@ -456,10 +457,15 @@ class cuboidDataset(data.Dataset):
         return self.__length
 
     def __getitem__(self, index):
-
         matrices_indices = self.__analogies_index[index]
-        return self.__matrices[matrices_indices[:6], :, :], \
-            self.__matrices[matrices_indices[6:], :, :]
+        if self.__test_mode:
+            return self.__matrices[matrices_indices[:6], :, :], \
+                   self.__matrices[matrices_indices[6:], :, :], \
+                   self.__sentence_couples_index[matrices_indices].tolist()
+        else:
+            return self.__matrices[matrices_indices[:6], :, :], \
+                self.__matrices[matrices_indices[6:], :, :]
+
 
 
 class matricesLoss(torch.nn.modules.loss.MSELoss):
@@ -524,19 +530,11 @@ class pixelLoss(torch.nn.modules.loss.MSELoss):
 
 
 
-def smoothing(l, level=3):
-    result_list = list()
-    for i in range(len(l) - level):
-        sum = 0
-        for j in range(level):
-            sum += l[i+j]
-        result_list.append(sum/level)
-    return result_list
 
 
 def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=False, save_path=None, verbose=False,
-          batch_size=64, initial_lr=0.001, decay=0.9, num_workers=0, average_frequency=30, print_error_path=None,
-          print_epoch_loss_path=None, patience=10):
+          batch_size=64, initial_lr=0.001, decay=0.9, num_workers=0, average_frequency=50, print_error_path=None,
+          print_epoch_loss_path=None, patience=20):
 
     """
     Train a given neural network.
@@ -600,9 +598,6 @@ def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=F
     epoch_train_loss = list()
     epoch_test_loss = list()
     while continue_training:
-        
-        
-    
         epoch_train_loss.append([])
         epoch_test_loss.append([])
         running_test_loss = 0.0
@@ -630,7 +625,6 @@ def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=F
                 else:
                     test_loss = criterion(outputs, truth)
 
-
             running_test_loss += test_loss.item()
             running_training_loss += training_loss.item()
             if time_to_average:    # print every average_frequency mini-batches
@@ -646,8 +640,6 @@ def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=F
                           (epoch, train_index+1, avg_training_loss, avg_test_loss))
                 running_training_loss = 0.0
                 running_test_loss = 0.0
-
-
 
         if print_epoch_loss_path is not None:
             train_loss_list = list()
@@ -665,8 +657,6 @@ def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=F
             plt.clf()
             plt.close()
 
-
-
         new_average_test_loss = epoch_test_loss[-1][-1]
         if new_average_test_loss < average_test_loss*0.9:
             average_test_loss = new_average_test_loss
@@ -680,7 +670,7 @@ def train(net, training_set, validation_set, truth_index=(6, 7, 8), pixel_mode=F
     return float(average_test_loss)
 
 
-def test(net, test_set, truth_index=(6, 7, 8), pixel_mode=False, verbose=False):
+def test(net, test_set, truth_index=(6, 7, 8), pixel_mode=False, verbose=False, limit=None, batch_size=128):
     """
     Test a given neural network.
 
@@ -696,14 +686,17 @@ def test(net, test_set, truth_index=(6, 7, 8), pixel_mode=False, verbose=False):
     :return: The final training loss that has been obtained after converging.
     """
 
+
     if verbose:
         print("Is cuda available?", torch.cuda.is_available())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    params = {'batch_size': 2048,
+    params = {'batch_size': batch_size,
+              'shuffle': True,
               'num_workers': 0}
 
-    net = net.to(device)
+    if net != "oracle":
+        net = net.to(device)
     test_generator = cycle(data.DataLoader(test_set, **params))
 
     if verbose:
@@ -712,20 +705,30 @@ def test(net, test_set, truth_index=(6, 7, 8), pixel_mode=False, verbose=False):
         print(net)
 
     if pixel_mode:
-        criterion = pixelLoss(truth_index[0], (truth_index[1], truth_index[2]))
+        criterion = pixelLoss(truth_index[0], (truth_index[1], truth_index[2]), test_mode=True)
     else:
-        criterion = matricesLoss(truth_index)
+        criterion = matricesLoss(truth_index, test_mode=True)
 
 
-        for train_index, (train_batch, train_truth) in progressbar(enumerate(training_generator)):
+    loss_list = list()
+    bleu_list = list()
+    for train_index, (batch, truth, sentences) in progressbar(enumerate(test_generator)):
+        if limit is not None and train_index > limit:
+            break
+        sentences = np.array(sentences).transpose(2, 0, 1)
 
-            batch, truth = train_batch, train_truth
-            with torch.no_grad():
+        with torch.no_grad():
+            if net == "oracle":
+                outputs = truth
+            else:
                 outputs = net(batch)
-                test_loss = criterion(outputs, truth).item()
+            test_loss = criterion(outputs, truth)
+            test_loss = test_loss.view(test_loss.shape[0], -1).mean(dim=1)
+            loss_list.extend(test_loss.tolist())
 
 
-    return float(average_test_loss)
+    return loss_list
+
 
 
 def numberofparameters(net):
@@ -741,14 +744,15 @@ def numberofparameters(net):
 
 
 
-"""
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-training_set = cuboidDataset("en-fr.matrices.train.npz", device=device)
-test_set = cuboidDataset("en-fr.matrices.test.npz", device=device)
-matrix_length = training_set.getmatrixlength()
+test_set = cuboidDataset("en-fr.matrices.test.npz", device=device, test_mode=True)
+matrix_length = test_set.getmatrixlength()
 
-net = PixelChanneledNetworkOptimized(matrix_length, layers_size=[100, 100])
-print("Number of parameters", numberofparameters(net))
-final_loss = train(net, training_set, test_set, truth_index=(6, 7, 8), verbose=True, initial_lr=0.001, decay=0.9, patience=10, print_error_path="error.pdf")
+net = FullyConnectedNetwork(matrix_length, layers_size=[482, 482, 482])
+net.load_state_dict(torch.load("fullyconnected3hl_482", map_location='cpu'))
 
-"""
+#print("Number of parameters", numberofparameters(net))
+scores = test("oracle", test_set, translation_test=True, verbose=True, limit=1)[0]
+
+print(np.mean(scores))
+print(np.std(scores))
