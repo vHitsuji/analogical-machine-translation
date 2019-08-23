@@ -276,10 +276,10 @@ def datasetfromcuboids(cuboids, first_model_path, second_model_path, bilingual_m
     # Rotating the cuboids plays with the properties of analogies.
     equivalent_analogies = [
         [0, 1, 2, 3],  # The initial cuboids
-        [2, 3, 0, 1],
-        [0, 2, 1, 3], [1, 3, 0, 2],
-        [1, 0, 3, 2], [3, 2, 1, 0],
-        [2, 0, 3, 1], [3, 1, 2, 0]
+        #[2, 3, 0, 1],
+        #[0, 2, 1, 3], [1, 3, 0, 2],
+        #[1, 0, 3, 2], [3, 2, 1, 0],
+        #[2, 0, 3, 1], [3, 1, 2, 0]
     ]
 
     # Computes the index of cuboids
@@ -325,7 +325,7 @@ def datasetfromcuboids(cuboids, first_model_path, second_model_path, bilingual_m
     matrices = [reshapeMatrix(value, biggest_sentence_length, fill=fill) for value in matrices]
     sentence_pairs = [
         (resizeSentence(s1, biggest_sentence_length, fill),
-         resizeSentence(s1, biggest_sentence_length, fill)) for s1, s2 in sentence_pairs]
+         resizeSentence(s2, biggest_sentence_length, fill)) for s1, s2 in sentence_pairs]
     print(" Done.")
 
     # Stacks all matrices into a big 3D array.
